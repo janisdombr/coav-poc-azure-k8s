@@ -20,6 +20,8 @@ cd terraform
 terraform init
 terraform apply
 ```
+<img src="images/tf-apply.png" width="544" />
+
 ## After success put connection string to CONN_STR env
 
 ```sh
@@ -32,16 +34,19 @@ export CONN_STR=$(terraform output -raw eventhub_connection_string)
 cd ../edge-emulator
 python3 emulator.py
 ```
+<img src="images/emulating.png" width="1104" />
 
 ## Creating OWASP tests and pass it
 
 ```sh
 pytest -v
 ```
+<img src="images/pytest.png" width="755" />
 
 ## Destroy terraform stack to save money
 
 ```sh
 cd ../terraform
 terraform destroy -auto-approve
-```                               
+```
+<img src="images/tf-destroy.png" width="457" />
