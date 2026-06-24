@@ -1,17 +1,21 @@
 import pytest
 from pydantic import ValidationError
-from emulator import ADSBTelemetry, generate_telemetry_dict
+from emulator import ADSBTelemetry, generate_airspace_traffic_payloads
 
 def test_valid_telemetry_generation():
     """Test: The generated data must strictly comply with the schema"""
-    raw = generate_telemetry_dict()
-    instance = ADSBTelemetry(**raw)
-    assert instance.flight_id == "COAV-882"
-    assert 28000 <= instance.altitude_ft <= 35000
+    payloads = generate_airspace_traffic_payloads()
+    assert len(payloads) > 0
+    
+    for raw in payloads:
+        instance = ADSBTelemetry(**raw)
+        assert instance.message_type in ["ADSB_TELEMETRY", "EDGE_VISION_AI"]
+        assert instance.flight_id.startswith("C") and "-" in instance.flight_id
 
 def test_invalid_latitude_overflow():
     """Security Test: Malformed latitude (>90) should be rejected (OWASP: Injection/Parametric Attack Protection)"""
     bad_data = {
+        "message_type": "ADSB_TELEMETRY",
         "flight_id": "COAV-882",
         "timestamp": "2026-06-24T12:00:00Z",
         "latitude": 95.0,  # Error is here
@@ -25,6 +29,7 @@ def test_invalid_latitude_overflow():
 def test_flight_id_regex_injection():
     """Security Test: Attempts to insert special characters into the Board Identifier should be prevented"""
     bad_data = {
+        "message_type": "ADSB_TELEMETRY",
         "flight_id": "COAV;DROP",  # Attempted SQL/Command injection via string
         "timestamp": "2026-06-24T12:00:00Z",
         "latitude": 69.23,
