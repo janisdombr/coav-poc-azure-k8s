@@ -43,10 +43,13 @@ pytest -v
 ```
 <img src="images/pytest.png" width="755" />
 
-## Destroy terraform stack to save money
+## Destroy terraform stack to save money (after all next steps)
 
 ```sh
 cd ../terraform
 terraform destroy -auto-approve
 ```
 <img src="images/tf-destroy.png" width="457" />
+
+## Next step - backend --> 
+[Backend Readme.me](backend/Readme.md)

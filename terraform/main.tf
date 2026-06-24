@@ -51,7 +51,7 @@ resource "azurerm_eventhub_authorization_rule" "send_rule" {
   namespace_name      = azurerm_eventhub_namespace.coav_eh_ns.name
   eventhub_name       = azurerm_eventhub.coav_eh.name
   resource_group_name = azurerm_resource_group.coav_rg.name
-  listen              = false
+  listen              = true
   send                = true
   manage              = false
 }

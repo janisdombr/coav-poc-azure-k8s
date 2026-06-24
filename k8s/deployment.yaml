@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coav-backend-deployment
+  labels:
+    app: coav-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: coav-backend
+  template:
+    metadata:
+      labels:
+        app: coav-backend
+    spec:
+      containers:
+        - name: backend-container
+          image: coav-backend:v1
+          imagePullPolicy: Never
+          env:
+            - name: CONN_STR
+              valueFrom:
+                secretKeyRef:
+                  name: coav-secrets
+                  key: eventhub-cn
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
