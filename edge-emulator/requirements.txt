@@ -1,1 +1,3 @@
 azure-eventhub==5.11.5
+pydantic==2.6.1
+pytest==8.0.0
