@@ -14,13 +14,13 @@ provider "azurerm" {
 
 # Create Resource Group
 resource "azurerm_resource_group" "coav_rg" {
-  name     = "rg-coav-poc-prod"
-  location = "westeurope"
+  name     = var.resource_group_name
+  location = var.location
 }
 
 # Create Storage Account
 resource "azurerm_storage_account" "coav_storage" {
-  name                     = "janisdombrstcoav"
+  name                     = var.storage_account_name
   resource_group_name      = azurerm_resource_group.coav_rg.name
   location                 = azurerm_resource_group.coav_rg.location
   account_tier             = "Standard"
@@ -29,7 +29,7 @@ resource "azurerm_storage_account" "coav_storage" {
 
 # Create Azure Event Hubs Namespace
 resource "azurerm_eventhub_namespace" "coav_eh_ns" {
-  name                = "evh-ns-coav-poc"
+  name                = var.eventhub_namespace
   location            = azurerm_resource_group.coav_rg.location
   resource_group_name = azurerm_resource_group.coav_rg.name
   sku                 = "Standard"
@@ -38,7 +38,7 @@ resource "azurerm_eventhub_namespace" "coav_eh_ns" {
 
 # Create Event Hub
 resource "azurerm_eventhub" "coav_eh" {
-  name                = "telemetry-adsb-inbound"
+  name                = var.eventhub_name
   namespace_name      = azurerm_eventhub_namespace.coav_eh_ns.name
   resource_group_name = azurerm_resource_group.coav_rg.name
   partition_count     = 2
@@ -56,8 +56,22 @@ resource "azurerm_eventhub_authorization_rule" "send_rule" {
   manage              = false
 }
 
-# Output connection string
+# Create Databricks Workspace
+resource "azurerm_databricks_workspace" "coav_dbw" {
+  name                = var.databricks_workspace_name
+  resource_group_name = azurerm_resource_group.coav_rg.name
+  location            = azurerm_resource_group.coav_rg.location
+  sku                 = "premium"
+}
+
+# --- OUTPUTS ---
+
 output "eventhub_connection_string" {
   value     = azurerm_eventhub_authorization_rule.send_rule.primary_connection_string
   sensitive = true
+}
+
+output "databricks_workspace_id" {
+  value       = azurerm_databricks_workspace.coav_dbw.id
+  description = "Pass this ID to the internal Databricks provider"
 }

@@ -53,3 +53,12 @@ terraform destroy -auto-approve
 
 ## Next step - backend --> 
 [Backend Readme.me](backend/Readme.md)
+
+
+## After backend test try Databricks
+
+```sh
+cd databricks
+terraform init
+terraform apply
+```
