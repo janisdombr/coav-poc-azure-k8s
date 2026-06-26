@@ -25,7 +25,7 @@ provider "databricks" {
 resource "databricks_cluster" "stream_compute" {
   cluster_name            = "coav-pyspark-stream-compute"
   spark_version           = "14.3.x-scala2.12"
-  node_type_id            = "Standard_D4s_v5" # change after Azure Free tier will expire
+  node_type_id            = "Standard_D4s_v3" # change after Azure Free tier will expire
   autotermination_minutes = 20                # remove after prod
   num_workers             = 0
   data_security_mode      = "SINGLE_USER"
@@ -47,8 +47,8 @@ resource "databricks_secret_scope" "coav_scope" {
 # connection string to secrets
 resource "databricks_secret" "eh_conn_string" {
   key          = "eventhub-conn-str"
-  string_value = data.terraform_remote_state.azure_infra.outputs.eventhub_connection_string
   scope        = databricks_secret_scope.coav_scope.name
+  string_value = replace(data.terraform_remote_state.azure_infra.outputs.eventhub_connection_string, "/;EntityPath=.*/", "")
 }
 
 # load PySpark script to Databricks workspace
@@ -56,6 +56,15 @@ resource "databricks_notebook" "pyspark_script" {
   source = "${path.module}/stream_processor.py"
   path   = "/Shared/stream_processor"
   format = "SOURCE"
+  lifecycle {
+    replace_triggered_by = [
+      terraform_data.script_trigger
+    ]
+  }
+}
+# rebuild after update file
+resource "terraform_data" "script_trigger" {
+  input = filemd5("${path.module}/stream_processor.py")
 }
 
 # job for deploy and run

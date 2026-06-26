@@ -75,3 +75,17 @@ output "databricks_workspace_id" {
   value       = azurerm_databricks_workspace.coav_dbw.id
   description = "Pass this ID to the internal Databricks provider"
 }
+
+output "eventhub_primary_key" {
+  value     = azurerm_eventhub_authorization_rule.send_rule.primary_key
+  sensitive = true
+}
+
+output "eventhub_name" {
+  value = azurerm_eventhub_authorization_rule.send_rule.eventhub_name
+}
+
+output "eventhub_namespace_name" {
+  value = azurerm_eventhub_authorization_rule.send_rule.namespace_name
+}
+

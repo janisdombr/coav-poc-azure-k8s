@@ -1,11 +1,27 @@
-# datetime: 2026-06-25
+# datetime: 2026-06-26
 from pyspark.sql.functions import col, from_json, expr
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType, BooleanType
+import re, sys
 
 # Get the Event Hub connection string from Databricks Secrets
-connection_string = dbutils.secrets.get(scope="coav-secrets", key="eventhub-conn-str")
+connection_string = dbutils.secrets.get(scope="coav-secrets", key="eventhub-conn-str").strip()
+
+# Build Kafka config — DBR 14.3+ uses shaded Kafka, requires kafkashaded prefix in JAAS
+eh_namespace = re.search(r'sb://(.*?)\.servicebus\.windows\.net', connection_string).group(1)
 eh_conf = {
-    'eventhubs.connectionString': connection_string
+    "kafka.bootstrap.servers":                      f"{eh_namespace}.servicebus.windows.net:9093",
+    "kafka.security.protocol":                      "SASL_SSL",
+    "kafka.sasl.mechanism":                         "PLAIN",
+    "kafka.sasl.jaas.config":                       (
+        'kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required '
+        'username="$ConnectionString" '
+        'password="' + connection_string + '";'
+    ),
+    "kafka.ssl.endpoint.identification.algorithm":  "https",
+    "kafka.group.id":                               "databricks-coav-stream",
+    "subscribe":                                    "telemetry-adsb-inbound",
+    "startingOffsets":                              "latest",
+    "failOnDataLoss":                               "false",
 }
 
 # create managed database if it doesn't exist
@@ -35,17 +51,18 @@ ai_schema = StructType([
 # ==============================================================================
 # LAYER 1: BRONZE (Raw ingestion from Event Hub into Append-Only Delta Table)
 # ==============================================================================
+# Read via Kafka protocol — field is "value" (not "body"), aliased to "body" for downstream compatibility
 df_raw_stream = spark.readStream \
-    .format("eventhubs") \
+    .format("kafka") \
     .options(**eh_conf) \
     .load() \
-    .withColumn("body", col("body").cast("string"))
+    .withColumn("body", col("value").cast("string"))
 
 # Write directly to Bronze table with raw string payloads
 query_bronze = df_raw_stream.writeStream \
     .format("delta") \
     .outputMode("append") \
-    .option("checkpointLocation", "/mnt/telemetry/checkpoints/bronze") \
+    .option("checkpointLocation", "file:/local_disk0/checkpoints/bronze") \
     .toTable("coav_dw.bronze_events")
 
 # ==============================================================================
@@ -60,7 +77,8 @@ df_adsb = df_bronze_source \
     .select("parsed.*") \
     .filter(col("message_type") == "ADSB_TELEMETRY") \
     .withColumn("event_time", col("timestamp").cast("timestamp")) \
-    .withWatermark("event_time", "5 minutes")
+    .withWatermark("event_time", "5 minutes") \
+    .alias("a")
 
 # Branch B: Edge AI vision stream with 5-minute event watermark
 df_vision = df_bronze_source \
@@ -68,32 +86,33 @@ df_vision = df_bronze_source \
     .select("parsed.*") \
     .filter(col("message_type") == "EDGE_VISION_AI") \
     .withColumn("ai_time", col("timestamp").cast("timestamp")) \
-    .withWatermark("ai_time", "5 minutes")
+    .withWatermark("ai_time", "5 minutes") \
+    .alias("v")
 
 # Stream-Stream Inner Join based on flight_id and a tight time window (-1 to +3 mins)
 df_joined_silver = df_adsb.join(
     df_vision,
     expr("""
-        df_adsb.flight_id = df_vision.flight_id AND
-        df_vision.ai_time >= df_adsb.event_time - interval 1 minute AND
-        df_vision.ai_time <= df_adsb.event_time + interval 3 minutes
+        a.flight_id = v.flight_id AND
+        v.ai_time >= a.event_time - interval 1 minute AND
+        v.ai_time <= a.event_time + interval 3 minutes
     """)
 ).select(
-    df_adsb.flight_id,
-    df_adsb.event_time.alias("timestamp"),
-    df_adsb.latitude,
-    df_adsb.longitude,
-    df_adsb.altitude_ft,
-    df_vision.camera_id,
-    df_vision.contrail_detected,
-    df_vision.confidence_score
+    col("a.flight_id"),
+    col("a.event_time").alias("timestamp"),
+    col("a.latitude"),
+    col("a.longitude"),
+    col("a.altitude_ft"),
+    col("v.camera_id"),
+    col("v.contrail_detected"),
+    col("v.confidence_score")
 )
 
 # Persist enriched telemetry + vision data into Silver Table
 query_silver = df_joined_silver.writeStream \
     .format("delta") \
     .outputMode("append") \
-    .option("checkpointLocation", "/mnt/telemetry/checkpoints/silver_enriched") \
+    .option("checkpointLocation", "file:/local_disk0/checkpoints/silver_enriched") \
     .toTable("coav_dw.silver_matched_traffic")
 
 # ==============================================================================
@@ -111,7 +130,7 @@ df_gold_issr = df_silver_source \
 query_gold = df_gold_issr.writeStream \
     .format("delta") \
     .outputMode("complete") \
-    .option("checkpointLocation", "/mnt/telemetry/checkpoints/gold_issr") \
+    .option("checkpointLocation", "file:/local_disk0/checkpoints/gold_issr") \
     .toTable("coav_dw.gold_verified_issr_zones")
 
 # Wait for termination to keep the streaming job active in Databricks compute context

@@ -62,3 +62,35 @@ cd databricks
 terraform init
 terraform apply
 ```
+
+## After creating all resources we need to run job using Databricks CLI
+## install if needed
+```sh
+brew tap databricks/tap
+brew trust databricks/tap
+brew install databricks
+export DATABRICKS_AUTH_TYPE="azure-cli"
+```
+## run (just run it if you have installed jq already)
+
+```sh
+WORKSPACE_RESOURCE_ID=$(terraform output -raw -state=../terraform.tfstate databricks_workspace_id)
+DATABRICKS_HOST="https://$(az resource show --ids "$WORKSPACE_RESOURCE_ID" --query "properties.workspaceUrl" -o tsv)"
+export DATABRICKS_HOST
+SUBSCRIPTION_ID=$(echo "$WORKSPACE_RESOURCE_ID" | cut -d'/' -f3)
+TENANT_ID=$(az account list --query "[?id=='$SUBSCRIPTION_ID'].tenantId" -o tsv)
+DATABRICKS_TOKEN=$(az account get-access-token \
+  --tenant "$TENANT_ID" \
+  --scope "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default" \
+  --query "accessToken" \
+  -o tsv)
+unset DATABRICKS_AUTH_TYPE
+export DATABRICKS_TOKEN
+JOB_ID=$(databricks jobs list --output JSON | jq -r '.[] | select(.settings.name == "Run Coav Stream Processing") | .job_id')
+databricks jobs run-now "$JOB_ID"
+```
+# return back to classic auth
+```sh
+unset DATABRICKS_TOKEN
+export DATABRICKS_AUTH_TYPE="azure-cli"
+```
