@@ -101,3 +101,6 @@ terraform.tfstate.backup
 
 ### Terraform Patch ###
 # End of https://www.gitignore.io/api/terraform
+
+CLAUDE.md
+logs.txt

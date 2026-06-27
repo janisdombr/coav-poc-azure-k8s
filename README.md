@@ -94,3 +94,67 @@ databricks jobs run-now "$JOB_ID"
 unset DATABRICKS_TOKEN
 export DATABRICKS_AUTH_TYPE="azure-cli"
 ```
+
+---
+
+## GUI Backend — Java Spring Boot
+
+### Two modes: `mock` (no Azure) or default (reads live from Event Hub).
+
+> **Note:** local Docker runs (`mock` and `Azure mode`) use Docker Desktop — do **not** activate
+> the minikube Docker context for these. If you previously ran `eval $(minikube docker-env)`,
+> reset it first: `eval $(minikube docker-env -u)`
+
+## Build the image (Docker Desktop, one-time)
+
+```sh
+docker build -t coav-gui-backend:v1 ./coav-gui/backend
+```
+
+## Mock mode — built-in simulator, no credentials needed
+
+```sh
+docker run -d -p 8080:8080 -e SPRING_PROFILES_ACTIVE=mock --name coav-backend coav-gui-backend:v1
+
+curl http://localhost:8080/api/flights
+curl http://localhost:8080/api/issr-zones
+```
+
+## Stop when done
+```sh
+docker stop coav-backend && docker rm coav-backend
+```
+
+## Azure mode — live Event Hub data
+
+```sh
+export CONN_STR=$(cd terraform && terraform output -raw eventhub_connection_string)
+docker run -d -p 8080:8080 -e CONN_STR="$CONN_STR" --name coav-backend coav-gui-backend:v1
+
+curl http://localhost:8080/api/flights
+```
+# Stop when done
+```sh
+docker stop coav-backend && docker rm coav-backend
+```
+
+## Deploy to Minikube cluster (Azure mode)
+
+The minikube Docker context is required here so the image is built inside the cluster node.
+
+```sh
+eval $(minikube docker-env)
+minikube image build -t coav-gui-backend:v1 ./coav-gui/backend
+
+# Create secret (skip if already exists from a previous deploy)
+kubectl create secret generic coav-secrets --from-literal=eventhub-cn="$CONN_STR"
+
+kubectl apply -f k8s/coav-gui-backend-deployment.yaml
+
+# Forward cluster port to localhost
+kubectl port-forward svc/coav-gui-backend-svc 8080:8080
+
+curl http://localhost:8080/api/flights
+```
+
+Full command reference → [coav-gui/backend/README.md](coav-gui/backend/README.md)

@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coav-gui-backend-deployment
+  labels:
+    app: coav-gui-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coav-gui-backend
+  template:
+    metadata:
+      labels:
+        app: coav-gui-backend
+    spec:
+      containers:
+        - name: coav-gui-backend
+          image: coav-gui-backend:v1
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CONN_STR
+              valueFrom:
+                secretKeyRef:
+                  name: coav-secrets
+                  key: eventhub-cn
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coav-gui-backend-svc
+spec:
+  selector:
+    app: coav-gui-backend
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
