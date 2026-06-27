@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>COAV — Contrail Avoidance System</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <!-- Runtime backend URL injected by nginx at container startup via /config.js -->
+    <!-- In local dev (Vite), this 404s silently and window.BACKEND_URL stays undefined -->
+    <script src="/config.js" onerror="window.BACKEND_URL=''"></script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

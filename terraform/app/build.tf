@@ -1,0 +1,96 @@
+# Builds all Docker images and pushes to ACR.
+# Container Apps and ACI depend on this to ensure images exist before creation.
+# Re-runs only when ACR changes (first deploy) or when explicitly replaced:
+#   terraform apply -replace=null_resource.build_images
+resource "null_resource" "build_images" {
+  triggers = {
+    acr_id = azurerm_container_registry.coav.id
+  }
+
+  provisioner "local-exec" {
+    working_dir = "${path.root}/../.."
+    interpreter = ["/bin/sh", "-c"]
+    command     = <<-EOT
+      set -e
+      echo "==> Logging in to ACR..."
+      az acr login --name ${azurerm_container_registry.coav.name}
+
+      echo "==> Building emulator..."
+      docker build -t ${azurerm_container_registry.coav.login_server}/coav-emulator:latest ./edge-emulator
+      docker push ${azurerm_container_registry.coav.login_server}/coav-emulator:latest
+
+      echo "==> Building backend..."
+      docker build -t ${azurerm_container_registry.coav.login_server}/coav-backend:latest ./coav-gui/backend
+      docker push ${azurerm_container_registry.coav.login_server}/coav-backend:latest
+
+      echo "==> Building frontend..."
+      docker build -t ${azurerm_container_registry.coav.login_server}/coav-frontend:latest ./coav-gui/frontend
+      docker push ${azurerm_container_registry.coav.login_server}/coav-frontend:latest
+
+      echo "==> All images pushed."
+    EOT
+  }
+}
+
+# Forces running Container Apps to pull freshly pushed images.
+# Triggered automatically when build_images re-runs (new ID after -replace).
+resource "null_resource" "update_apps" {
+  triggers = {
+    build_id = null_resource.build_images.id
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    command     = <<-EOT
+      set -e
+      echo "==> Updating Container Apps with latest images..."
+      az containerapp update \
+        --name coav-backend \
+        --resource-group ${data.azurerm_resource_group.coav.name} \
+        --image ${azurerm_container_registry.coav.login_server}/coav-backend:latest
+
+      az containerapp update \
+        --name coav-frontend \
+        --resource-group ${data.azurerm_resource_group.coav.name} \
+        --image ${azurerm_container_registry.coav.login_server}/coav-frontend:latest
+
+      echo "==> Container Apps updated."
+    EOT
+  }
+
+  depends_on = [
+    azurerm_container_app.backend,
+    azurerm_container_app.frontend,
+  ]
+}
+
+# ACI emulator — created after images are built and pushed
+resource "azurerm_container_group" "emulator" {
+  count = var.deploy_emulator ? 1 : 0
+
+  name                = "aci-coav-emulator"
+  location            = data.azurerm_resource_group.coav.location
+  resource_group_name = data.azurerm_resource_group.coav.name
+  ip_address_type     = "None"
+  os_type             = "Linux"
+  restart_policy      = "Always"
+
+  container {
+    name   = "emulator"
+    image  = "${azurerm_container_registry.coav.login_server}/coav-emulator:latest"
+    cpu    = "0.5"
+    memory = "0.5"
+
+    environment_variables = {
+      CONN_STR = "${data.azurerm_eventhub_namespace_authorization_rule.root.primary_connection_string};EntityPath=${var.eventhub_name}"
+    }
+  }
+
+  image_registry_credential {
+    server   = azurerm_container_registry.coav.login_server
+    username = azurerm_container_registry.coav.admin_username
+    password = azurerm_container_registry.coav.admin_password
+  }
+
+  depends_on = [null_resource.build_images]
+}

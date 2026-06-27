@@ -1,14 +1,13 @@
 import time
-import json
-import random
 import datetime
 import os
 import math
+import random
 from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 from azure.eventhub import EventHubProducerClient, EventData
 
-# Strict data schema for ATM/COAV telemetry (protection from not valid types or injections)
+# ── Telemetry schema (OWASP A03:2021 — validation before sending) ─────────────
 class ADSBTelemetry(BaseModel):
     message_type: Literal["ADSB_TELEMETRY", "EDGE_VISION_AI"]
     flight_id: str = Field(..., min_length=3, max_length=12, pattern=r"^[A-Z0-9\-]+$")
@@ -21,135 +20,207 @@ class ADSBTelemetry(BaseModel):
     contrail_detected: bool | None = None
     confidence_score: float | None = Field(None, ge=0.0, le=1.0)
 
-# Local 3D critical weather zones cache (ISSR regions)
+
+# ── ISSR zones — MUAC sector (mirrors FlightStateStore.ISSR_ZONES) ─────────────
 CRITICAL_ZONES = [
-    (69.1000, 69.3500, 17.8000, 18.2000, 31000, 36000), # Zone Alpha near radar station
-    (69.4000, 69.6500, 18.3000, 18.7000, 33000, 39000)  # Zone Bravo northeast
+    (50.20, 51.00, 3.80, 5.40, 33000, 38000),  # Zone Alpha — Brussels convergence
+    (51.30, 52.50, 5.80, 8.20, 31000, 37000),  # Zone Bravo — Dutch-German border
 ]
 
 def is_inside_critical_zone(lat: float, lon: float, alt: int) -> bool:
-    """Check if the aircraft coordinates intersect with 3D weather cubes"""
     for zone in CRITICAL_ZONES:
         min_lat, max_lat, min_lon, max_lon, min_alt, max_alt = zone
         if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon and min_alt <= alt <= max_alt:
             return True
     return False
 
-def generate_airspace_traffic_payloads() -> list[dict]:
-    """Generate mock data bundle for multiple aircraft based on current time functions"""
-    t = time.time()
-    iso_timestamp = datetime.datetime.utcnow().isoformat() + "Z"
-    payloads = []
-    
-    # Base coordination matrix for Northern Norway sector
-    base_lat, base_lon = 69.23, 17.98
-    
-    # Dynamic time-based flight scheduling (5-minute interval windows)
-    window_id = int((t % 86400) / 300)
-    flights_pool = [
-        {"id": f"C{(window_id * 3 + 1) % 900 + 100}-CLB", "type": "CLIMB"},
-        {"id": f"C{(window_id * 3 + 2) % 900 + 100}-CRZ", "type": "CRUISE"},
-        {"id": f"C{(window_id * 3 + 3) % 900 + 100}-DST", "type": "DISTANT"}
-    ]
-    
-    for f_info in flights_pool:
-        fid = f_info["id"]
-        ftype = f_info["type"]
-        
-        if ftype == "CLIMB":
-            # Aircraft taking off and climbing
-            elapsed = (t % 300) / 10.0
-            lat = base_lat + (elapsed * 0.002)
-            lon = base_lon + (elapsed * 0.003)
-            alt = min(12000 + int(elapsed * 800), 32000)
-            speed = min(250 + int(elapsed * 10), 410)
-            cam_visible = True
-            
-        elif ftype == "CRUISE":
-            # Aircraft cruising on high altitude flight level
-            angle = (t % 360) * (math.pi / 180)
-            lat = base_lat + (0.04 * math.sin(angle))
-            lon = base_lon + (0.04 * math.cos(angle))
-            alt = 34000
-            speed = 450
-            cam_visible = True
-            
-        else:
-            # Distant high-altitude transit aircraft, passing quickly out of camera range
-            elapsed = (t % 300) / 5.0
-            lat = base_lat + 0.15 + (elapsed * 0.005)
-            lon = base_lon + 0.15 + (elapsed * 0.005)
-            alt = 37000
-            speed = 470
-            cam_visible = False
-            
-        # 1. Append ADS-B Telemetry message layout
-        payloads.append({
+
+# ── Transit corridors (mirrors FlightSimulatorService.ROUTES) ─────────────────
+# Each entry: (startLat, startLon, endLat, endLon)
+ROUTES = [
+    (50.20, 3.80, 52.80, 9.00),  # SW→NE  A7 / N871  Paris → Hamburg
+    (51.50, 9.20, 50.70, 3.40),  # E→W    T180       Frankfurt → Brussels
+    (49.80, 6.50, 52.90, 3.20),  # SE→NW  B317       Luxembourg → North Sea
+    (49.40, 4.60, 53.30, 6.80),  # S→N    UN852      Reims → Frisian Islands
+]
+DURATIONS    = [950, 780, 870, 820]   # ticks to cross the sector
+COOLDOWN_BASE = 130                    # ticks gap before next same-route flight
+COOLDOWN_VAR  = 60
+ALTITUDES    = [35000, 37000, 33000, 36000]
+SPEEDS       = [475, 465, 480, 460]
+
+ROUTE_AIRLINES = [
+    ["BAW", "EZY", "VLG", "IBE", "TAP"],
+    ["DLH", "AUA", "SWR", "BER", "WZZ"],
+    ["KLM", "TRA", "DAT", "VLR", "DEN"],
+    ["AFR", "TVF", "HOP", "XLR", "LFR"],
+]
+ROUTE_NUMBERS = [
+    [214, 316, 429, 551, 682],
+    [437, 593, 712, 821, 934],
+    [871, 992, 104, 215, 328],
+    [133, 267, 381, 475, 598],
+]
+
+# ── Holding stacks (fixed callsign, infinite circular orbit) ──────────────────
+# Each entry: (centerLat, centerLon, radiusLat, radiusLon)
+HOLDS = [
+    (50.50, 4.80, 0.12, 0.19),  # Brussels  DENUT hold  FL350
+    (52.30, 4.45, 0.10, 0.16),  # Amsterdam SUGOL hold  FL330
+]
+HOLD_ALTS   = [35000, 33000]
+HOLD_SPEEDS = [265, 265]
+HOLD_IDS    = ["BEL256", "KLM892"]
+HOLD_OMEGA  = 2 * math.pi / 420.0  # one orbit ≈ 420 ticks (21 min at 3s/tick)
+
+# ── Departure (one-shot: Maastricht Aachen Airport → northbound) ──────────────
+DEP_ID       = "TUI6KL"
+DEP_START    = (50.91, 5.77)
+DEP_END      = (52.50, 4.20)
+DEP_DURATION = 600
+
+
+# ── Mutable simulator state ────────────────────────────────────────────────────
+
+def make_callsign(route_idx: int, airline_idx: int) -> str:
+    return ROUTE_AIRLINES[route_idx][airline_idx] + str(ROUTE_NUMBERS[route_idx][airline_idx])
+
+
+# Stagger initial progress so aircraft start spread across their routes
+route_progress    = [int(DURATIONS[i] * (i + 1) / (len(ROUTES) + 1)) for i in range(len(ROUTES))]
+route_active      = [True] * len(ROUTES)
+route_cooldown    = [0] * len(ROUTES)
+route_airline_idx = [0] * len(ROUTES)
+route_flight_id   = [make_callsign(i, 0) for i in range(len(ROUTES))]
+
+dep_progress = 0
+dep_done     = False
+tick         = 0
+
+
+def build_payloads() -> list[dict]:
+    """
+    Advance simulation by one tick and return the list of telemetry event dicts.
+    Transit flights exit the sector naturally, then a new aircraft with a different
+    callsign starts from the route origin after a gap.  Holding aircraft keep the
+    same callsign indefinitely.  Mirrors FlightSimulatorService.java tick() logic.
+    """
+    global tick, dep_progress, dep_done
+    global route_progress, route_active, route_cooldown, route_airline_idx, route_flight_id
+
+    tick += 1
+    iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    active_aircraft: list[tuple] = []  # (flight_id, lat, lon, alt, speed)
+
+    # ── 1. Transit flights ─────────────────────────────────────────────────────
+    for i in range(len(ROUTES)):
+        if not route_active[i]:
+            route_cooldown[i] -= 1
+            if route_cooldown[i] <= 0:
+                route_airline_idx[i] = (route_airline_idx[i] + 1) % len(ROUTE_AIRLINES[i])
+                route_flight_id[i]   = make_callsign(i, route_airline_idx[i])
+                route_progress[i]    = 0
+                route_active[i]      = True
+            continue
+
+        route_progress[i] += 1
+        if route_progress[i] > DURATIONS[i]:
+            # Exited sector — stop publishing; Java FlightStateStore 5-min TTL removes it
+            route_active[i]   = False
+            route_cooldown[i] = COOLDOWN_BASE + random.randint(0, COOLDOWN_VAR)
+            continue
+
+        t   = route_progress[i] / DURATIONS[i]
+        lat = ROUTES[i][0] + t * (ROUTES[i][2] - ROUTES[i][0])
+        lon = ROUTES[i][1] + t * (ROUTES[i][3] - ROUTES[i][1])
+        alt = ALTITUDES[i] + int(math.sin(tick * 0.003 + i) * 200)
+        active_aircraft.append((route_flight_id[i], lat, lon, alt, SPEEDS[i]))
+
+    # ── 2. Holding stacks (fixed callsign, endless orbit) ─────────────────────
+    for h in range(len(HOLDS)):
+        angle = tick * HOLD_OMEGA + h * math.pi
+        lat   = HOLDS[h][0] + HOLDS[h][2] * math.sin(angle)
+        lon   = HOLDS[h][1] + HOLDS[h][3] * math.cos(angle)
+        alt   = HOLD_ALTS[h] + int(math.sin(tick * 0.002 + h) * 100)
+        active_aircraft.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h]))
+
+    # ── 3. Departure (one-shot) ────────────────────────────────────────────────
+    if not dep_done:
+        dep_progress += 1
+        t   = dep_progress / DEP_DURATION
+        lat = DEP_START[0] + t * (DEP_END[0] - DEP_START[0])
+        lon = DEP_START[1] + t * (DEP_END[1] - DEP_START[1])
+        alt = int(10000 + (t / 0.4) * 25000) if t < 0.4 else 35000 + int(math.sin(tick * 0.003) * 100)
+        spd = int(280 + (t / 0.4) * 195) if t < 0.4 else 475
+        active_aircraft.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475)))
+        if dep_progress >= DEP_DURATION:
+            dep_done = True
+
+    # ── Build event pairs (ADSB + EDGE_VISION_AI) for each aircraft ───────────
+    events: list[dict] = []
+    for fid, lat, lon, alt, spd in active_aircraft:
+        in_zone = is_inside_critical_zone(lat, lon, alt)
+        conf    = round(0.91 + 0.05 * math.sin(tick * 0.1), 2) if in_zone else 0.95
+
+        events.append({
             "message_type": "ADSB_TELEMETRY",
             "flight_id": fid,
-            "timestamp": iso_timestamp,
+            "timestamp": iso,
             "latitude": round(lat, 5),
             "longitude": round(lon, 5),
             "altitude_ft": alt,
-            "speed_knots": speed
+            "speed_knots": spd,
         })
-        
-        # 2. Append Edge Vision AI message layout if visible by optical ground station
-        if cam_visible:
-            has_contrail = is_inside_critical_zone(lat, lon, alt)
-            payloads.append({
-                "message_type": "EDGE_VISION_AI",
-                "camera_id": "STATION-FN-04",
-                "flight_id": fid,
-                "timestamp": iso_timestamp,
-                "latitude": round(lat, 5),
-                "longitude": round(lon, 5),
-                "altitude_ft": alt,
-                "speed_knots": speed,
-                "contrail_detected": has_contrail,
-                "confidence_score": round(0.91 + (0.05 * math.sin(t)), 2) if has_contrail else 0.95
-            })
-            
-    return payloads
+        events.append({
+            "message_type": "EDGE_VISION_AI",
+            "camera_id": "STATION-BE-01",
+            "flight_id": fid,
+            "timestamp": iso,
+            "latitude": round(lat, 5),
+            "longitude": round(lon, 5),
+            "altitude_ft": alt,
+            "speed_knots": spd,
+            "contrail_detected": in_zone,
+            "confidence_score": conf,
+        })
+
+    return events
+
 
 def main():
-    # get connection string from ENV 
-    CONNECTION_STR = os.getenv('CONN_STR')
-    if not CONNECTION_STR:
-        print("Error: Environment variable 'CONN_STR' is not set.")
+    conn_str = os.getenv("CONN_STR")
+    if not conn_str:
+        print("Error: CONN_STR environment variable is not set.")
         return
-    EVENTHUB_NAME = "telemetry-adsb-inbound"
-    
-    # Client init
-    producer = EventHubProducerClient.from_connection_string(conn_str=CONNECTION_STR, eventhub_name=EVENTHUB_NAME)
-    print(f"Start emulator COAV Edge. Sending dynamic multi-flight streams to Event Hub: {EVENTHUB_NAME}...")
-    
+
+    eventhub_name = "telemetry-adsb-inbound"
+    producer = EventHubProducerClient.from_connection_string(
+        conn_str=conn_str, eventhub_name=eventhub_name
+    )
+    print(f"[COAV Emulator] Sending to Event Hub: {eventhub_name}")
+    print(f"[COAV Emulator] {len(ROUTES)} transit routes + {len(HOLDS)} holding stacks + 1 departure")
+
     try:
         with producer:
             while True:
-                # Gen dynamic data pack list
-                raw_payloads = generate_airspace_traffic_payloads()
-                
+                raw_payloads = build_payloads()
                 try:
-                    event_data_batch = producer.create_batch()
-                    
-                    for raw_data in raw_payloads:
-                        # Validation of data before send to hub
-                        telemetry = ADSBTelemetry(**raw_data)
-                        json_data = telemetry.model_dump_json()
-                        event_data_batch.add(EventData(json_data))
-                        print(f" [x] Sent [{raw_data['message_type']}]: {json_data}")
-                    
-                    # Send batch to Event Hub
-                    producer.send_batch(event_data_batch)
-                    
+                    batch = producer.create_batch()
+                    for raw in raw_payloads:
+                        telemetry = ADSBTelemetry(**raw)
+                        batch.add(EventData(telemetry.model_dump_json()))
+                        print(f"  [x] {raw['message_type']:20s} {raw['flight_id']:8s} "
+                              f"lat={raw['latitude']:.3f} lon={raw['longitude']:.3f} "
+                              f"alt={raw['altitude_ft']}ft spd={raw['speed_knots']}kt")
+                    producer.send_batch(batch)
+                    print(f"  --- tick={tick} aircraft={len(raw_payloads) // 2} ---")
                 except ValidationError as ve:
-                    print(f" [OWASP ALERT] Data has been not passed security validation: {ve}")
-                    
-                # Wait 3 seconds between messages
+                    print(f"  [OWASP ALERT] Validation failed: {ve}")
+
                 time.sleep(3)
     except KeyboardInterrupt:
-        print("\nEmulator stopped.")
+        print("\n[COAV Emulator] Stopped.")
+
 
 if __name__ == "__main__":
     main()

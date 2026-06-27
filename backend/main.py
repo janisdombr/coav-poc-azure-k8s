@@ -10,8 +10,8 @@ FLIGHT_STATE = {}
 
 # Local cache of 3D critical weather zones received from the predictive ML model
 WEATHER_GRID_ISSR = [
-    {"min_lat": 69.1000, "max_lat": 69.3500, "min_lon": 17.8000, "max_lon": 18.2000, "min_alt": 31000, "max_alt": 36000},
-    {"min_lat": 69.4000, "max_lat": 69.6500, "min_lon": 18.3000, "max_lon": 18.7000, "min_alt": 33000, "max_alt": 39000}
+    {"min_lat": 50.20, "max_lat": 51.00, "min_lon": 3.80, "max_lon": 5.40, "min_alt": 33000, "max_alt": 38000},
+    {"min_lat": 51.30, "max_lat": 52.50, "min_lon": 5.80, "max_lon": 8.20, "min_alt": 31000, "max_alt": 37000},
 ]
 
 # Strict type validation on the K8s receiver side (OWASP A03:2021-Injection)

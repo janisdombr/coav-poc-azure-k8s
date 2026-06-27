@@ -73,7 +73,7 @@ class FlightControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(2))
             .andExpect(jsonPath("$[0].id").value("ALPHA"))
-            .andExpect(jsonPath("$[0].minLat").value(69.10))
+            .andExpect(jsonPath("$[0].minLat").value(50.20))
             .andExpect(jsonPath("$[0].severity").value("CRITICAL"))
             .andExpect(jsonPath("$[1].id").value("BRAVO"));
     }

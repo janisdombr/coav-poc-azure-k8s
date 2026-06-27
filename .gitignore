@@ -104,3 +104,18 @@ terraform.tfstate.backup
 
 CLAUDE.md
 logs.txt
+.claude/
+
+# Maven / Java build artifacts
+coav-gui/backend/target/
+
+# Node / Vite (frontend)
+coav-gui/frontend/node_modules/
+coav-gui/frontend/dist/
+coav-gui/frontend/.vite/
+coav-gui/frontend/*.local
+coav-gui/frontend/.env
+coav-gui/frontend/.env.*
+
+# edge-pi Node deps
+edge-pi/node/node_modules/

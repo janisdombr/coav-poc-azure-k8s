@@ -71,9 +71,11 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
             client.getPartitionIds().forEach(partitionIds::add);
             log.info("[EVENT HUB] Partitions: {}", partitionIds);
 
-            // Track read position per partition (start at latest — live view only)
+            // Start from events enqueued within the last 15 minutes — skip stale history
+            Instant cutoffEnqueueTime = Instant.now().minus(java.time.Duration.ofMinutes(15));
             Map<String, EventPosition> positions = new ConcurrentHashMap<>();
-            partitionIds.forEach(id -> positions.put(id, EventPosition.earliest()));
+            partitionIds.forEach(id ->
+                positions.put(id, EventPosition.fromEnqueuedTime(cutoffEnqueueTime)));
 
             while (running.get() && !Thread.currentThread().isInterrupted()) {
                 for (String partitionId : partitionIds) {
