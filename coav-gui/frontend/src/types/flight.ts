@@ -4,10 +4,27 @@ export interface Flight {
   longitude: number
   altitudeFt: number
   speedKnots: number
+  heading: number
   contrailDetected: boolean
   issrZone: boolean
-  alert: 'CRITICAL' | 'WARNING' | null
+  alert: 'CRITICAL' | 'WARNING' | 'APPROACHING' | null
+  approachingZoneId: string | null
+  approachingMinutes: number | null
   timestamp: string
+}
+
+export interface Advisory {
+  id: string
+  flightId: string
+  zoneId: string
+  text: string
+  currentFl: number
+  recommendedFlUp: number
+  recommendedFlDown: number
+  estimatedMinutes: number
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED'
+  generatedAt: string
+  decidedAt: string | null
 }
 
 export interface IssrZone {

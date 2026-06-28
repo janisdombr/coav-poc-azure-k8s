@@ -47,8 +47,10 @@ public class FlightSimulatorService {
     private static final int COOLDOWN_VAR  = 60;
 
     // Typical cruise FL and speed per corridor
-    private static final int[] ALTITUDES = {35000, 37000, 33000, 36000};
-    private static final int[] SPEEDS    = {475, 465, 480, 460};
+    private static final int[]    ALTITUDES      = {35000, 37000, 33000, 36000};
+    private static final int[]    SPEEDS         = {475, 465, 480, 460};
+    // Pre-computed bearings (degrees, 0=N 90=E) from route start → end
+    private static final double[] ROUTE_HEADINGS = {51.0, 257.0, 326.0, 20.0};
 
     // Airline pools per corridor — cycle through on each new transit
     private static final String[][] ROUTE_AIRLINES = {
@@ -140,16 +142,20 @@ public class FlightSimulatorService {
             double lon = ROUTES[i][1] + t * (ROUTES[i][3] - ROUTES[i][1]);
             int    alt = ALTITUDES[i] + (int) (Math.sin(tick * 0.003 + i) * 200);
 
-            emit(routeFlightId[i], lat, lon, alt, SPEEDS[i], iso);
+            emit(routeFlightId[i], lat, lon, alt, SPEEDS[i], ROUTE_HEADINGS[i], iso);
         }
 
         // ── 2. Holding stacks (infinite orbit, fixed callsign) ─────────────────
         for (int h = 0; h < HOLDS.length; h++) {
-            double angle = tick * HOLD_OMEGA + h * Math.PI;
-            double lat   = HOLDS[h][0] + HOLDS[h][2] * Math.sin(angle);
-            double lon   = HOLDS[h][1] + HOLDS[h][3] * Math.cos(angle);
-            int    alt   = HOLD_ALTS[h] + (int) (Math.sin(tick * 0.002 + h) * 100);
-            emit(HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], iso);
+            double angle   = tick * HOLD_OMEGA + h * Math.PI;
+            double lat     = HOLDS[h][0] + HOLDS[h][2] * Math.sin(angle);
+            double lon     = HOLDS[h][1] + HOLDS[h][3] * Math.cos(angle);
+            int    alt     = HOLD_ALTS[h] + (int) (Math.sin(tick * 0.002 + h) * 100);
+            // Tangential heading: perpendicular to radius at current orbit position
+            double dLat    = HOLDS[h][2] * Math.cos(angle);   // proportional to velocity
+            double dLon    = -HOLDS[h][3] * Math.sin(angle);
+            double heading = (Math.toDegrees(Math.atan2(dLon, dLat)) + 360) % 360;
+            emit(HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], heading, iso);
         }
 
         // ── 3. Departure (one-shot: climbs, exits, done) ──────────────────────
@@ -167,7 +173,7 @@ public class FlightSimulatorService {
                 ? (int) (280 + t / 0.4 * 195)  // accelerate 280 → 475 kt
                 : 475;
 
-            emit(DEP_ID, lat, lon, alt, speed, iso);
+            emit(DEP_ID, lat, lon, alt, speed, 329.0, iso);
 
             if (depProgress >= DEP_DURATION) {
                 depDone = true; // exits sector — TTL will clean up store entry
@@ -175,15 +181,18 @@ public class FlightSimulatorService {
         }
     }
 
-    private void emit(String flightId, double lat, double lon, int alt, int speed, String iso) {
+    private void emit(String flightId, double lat, double lon, int alt, int speed,
+                      double heading, String iso) {
         boolean inIssr   = store.isInsideIssrZone(lat, lon, alt);
         boolean contrail = inIssr || rng.nextDouble() < 0.12;
+        // Base alert from position/contrail — FlightStateStore will upgrade to APPROACHING if needed
         String  alert    = (contrail && inIssr) ? "CRITICAL" : contrail ? "WARNING" : null;
 
         store.updateFlight(Flight.builder()
             .flightId(flightId)
             .latitude(lat).longitude(lon)
             .altitudeFt(alt).speedKnots(speed)
+            .heading(heading)
             .contrailDetected(contrail).issrZone(inIssr)
             .alert(alert).timestamp(iso)
             .build());

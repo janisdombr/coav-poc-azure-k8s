@@ -19,6 +19,7 @@ public class RawTelemetry {
     private Integer altitudeFt;
     @JsonProperty("speed_knots")
     private Integer speedKnots;
+    private Double heading;
     @JsonProperty("camera_id")
     private String cameraId;
     @JsonProperty("contrail_detected")

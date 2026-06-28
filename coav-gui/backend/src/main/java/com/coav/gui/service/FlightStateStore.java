@@ -19,10 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FlightStateStore {
 
     private final SimpMessagingTemplate messagingTemplate;
+    private final AdvisoryService       advisoryService;
 
-    // ISSR zone coordinates — single source of truth mirroring
-    // emulator.py CRITICAL_ZONES and backend/main.py WEATHER_GRID_ISSR
-    // MUAC sector: Belgium/Netherlands/Germany upper airspace (FL310–FL390)
+    // Single source of truth for ISSR zones — mirrors emulator.py and backend/main.py
     public static final List<IssrZone> ISSR_ZONES = List.of(
         IssrZone.builder()
             .id("ALPHA").label("Zone Alpha — Brussels convergence")
@@ -36,12 +35,17 @@ public class FlightStateStore {
             .build()
     );
 
+    // How many 1-minute steps to project forward when checking APPROACHING
+    private static final int APPROACH_HORIZON_MINUTES = 20;
+
     private final Map<String, Flight>  flights  = new ConcurrentHashMap<>();
     private final Map<String, Instant> lastSeen = new ConcurrentHashMap<>();
 
     public void updateFlight(Flight flight) {
-        flights.put(flight.getFlightId(), flight);
-        lastSeen.put(flight.getFlightId(), Instant.now());
+        Flight enriched = enrichAlert(flight);
+        flights.put(enriched.getFlightId(), enriched);
+        lastSeen.put(enriched.getFlightId(), Instant.now());
+        advisoryService.onFlightUpdate(enriched);
     }
 
     public Collection<Flight> getAllFlights() {
@@ -64,7 +68,6 @@ public class FlightStateStore {
         return false;
     }
 
-    // Push current state to all WebSocket subscribers every 2s (both profiles)
     @Scheduled(fixedRate = 2000)
     public void broadcastState() {
         Collection<Flight> active = getAllFlights();
@@ -72,4 +75,69 @@ public class FlightStateStore {
             messagingTemplate.convertAndSend("/topic/flights", active);
         }
     }
+
+    // ── Trajectory projection ──────────────────────────────────────────────────
+
+    /**
+     * Overrides alert to "APPROACHING" if the flight will enter an ISSR zone
+     * within APPROACH_HORIZON_MINUTES. Flights already inside a zone keep CRITICAL.
+     */
+    private Flight enrichAlert(Flight f) {
+        if (f.isIssrZone()) {
+            // Already inside — keep existing CRITICAL alert, clear approaching fields
+            return f.toBuilder()
+                    .alert("CRITICAL")
+                    .approachingZoneId(null)
+                    .approachingMinutes(null)
+                    .build();
+        }
+
+        ApproachResult approach = projectTrajectory(
+                f.getLatitude(), f.getLongitude(), f.getAltitudeFt(),
+                f.getSpeedKnots(), f.getHeading());
+
+        if (approach != null) {
+            return f.toBuilder()
+                    .alert("APPROACHING")
+                    .approachingZoneId(approach.zoneId())
+                    .approachingMinutes(approach.minutes())
+                    .build();
+        }
+
+        // Keep WARNING/null from the simulator (contrail detection)
+        return f.toBuilder()
+                .approachingZoneId(null)
+                .approachingMinutes(null)
+                .build();
+    }
+
+    /**
+     * Projects flight position 1 minute at a time (flat-earth, sufficient for PoC).
+     * Returns which zone it will enter and in how many minutes, or null if it won't.
+     *
+     * Speed in knots → 1 knot = 1 NM/h = 1/60 arc-minute of lat per minute
+     *                         = 1/3600 degree of lat per minute.
+     */
+    private ApproachResult projectTrajectory(double lat, double lon, int alt,
+                                             int speedKnots, double headingDeg) {
+        double distDegPerMin = speedKnots / 3600.0;
+        double headRad       = Math.toRadians(headingDeg);
+        double cosLat        = Math.cos(Math.toRadians(lat));
+        if (cosLat < 0.001) cosLat = 0.001;  // guard for poles
+
+        for (int min = 1; min <= APPROACH_HORIZON_MINUTES; min++) {
+            lat += distDegPerMin * Math.cos(headRad);
+            lon += distDegPerMin * Math.sin(headRad) / cosLat;
+            for (IssrZone z : ISSR_ZONES) {
+                if (lat >= z.getMinLat() && lat <= z.getMaxLat()
+                        && lon >= z.getMinLon() && lon <= z.getMaxLon()
+                        && alt >= z.getMinAlt() && alt <= z.getMaxAlt()) {
+                    return new ApproachResult(z.getId(), min);
+                }
+            }
+        }
+        return null;
+    }
+
+    private record ApproachResult(String zoneId, int minutes) {}
 }

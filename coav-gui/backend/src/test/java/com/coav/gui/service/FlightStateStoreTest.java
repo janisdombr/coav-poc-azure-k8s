@@ -23,6 +23,9 @@ class FlightStateStoreTest {
     @Mock
     SimpMessagingTemplate messagingTemplate;
 
+    @Mock
+    AdvisoryService advisoryService;
+
     @InjectMocks
     FlightStateStore store;
 
@@ -110,7 +113,8 @@ class FlightStateStoreTest {
             .latitude(69.23).longitude(17.98).altitudeFt(33000)
             .speedKnots(490).timestamp("2026-06-26T10:00:00Z").build();
         store.updateFlight(f);
-        assertThat(store.getAllFlights()).containsExactly(f);
+        assertThat(store.getAllFlights()).hasSize(1);
+        assertThat(store.getAllFlights().iterator().next().getFlightId()).isEqualTo("C100-CLB");
     }
 
     @Test

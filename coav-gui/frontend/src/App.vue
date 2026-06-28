@@ -3,16 +3,19 @@ import { ref, computed, onMounted } from 'vue'
 import FlightMap from './components/FlightMap.vue'
 import FlightProfile from './components/FlightProfile.vue'
 import AlertPanel from './components/AlertPanel.vue'
+import SupervisorPanel from './components/SupervisorPanel.vue'
+import FdoPanel from './components/FdoPanel.vue'
 import { useFlightStore } from './composables/useFlightStore'
 
-const { connected, flights, criticalFlights } = useFlightStore()
+const { connected, flights, criticalFlights, advisories } = useFlightStore()
 
 const isSidebarOpen = ref(true)
-const alertCount = computed(() => criticalFlights.value.length)
+const activeTab = ref<'supervisor' | 'fdo' | 'atco'>('atco')
+const alertCount    = computed(() => criticalFlights.value.length)
+const advisoryCount = computed(() => advisories.value.length)
 
 function toggleSidebar() {
   isSidebarOpen.value = !isSidebarOpen.value
-  // Notify Leaflet after CSS transition so it redraws tiles for the new viewport size
   const delay = window.innerWidth < 768 ? 320 : 270
   setTimeout(() => window.dispatchEvent(new Event('resize')), delay)
 }
@@ -137,11 +140,44 @@ onMounted(() => {
             <div class="handle-bar"></div>
           </div>
 
-          <div class="profile-section">
-            <FlightProfile />
+          <!-- Role selector: pill bar — filled active state reads as "selected identity" not "nav section" -->
+          <div class="role-bar">
+            <button
+              :class="['role-pill', { active: activeTab === 'supervisor' }]"
+              @click="activeTab = 'supervisor'"
+            >Supervisor</button>
+            <button
+              :class="['role-pill', { active: activeTab === 'fdo' }]"
+              @click="activeTab = 'fdo'"
+            >
+              FDO
+              <span v-if="advisoryCount > 0" class="role-count fdo-count">{{ advisoryCount }}</span>
+            </button>
+            <button
+              :class="['role-pill', { active: activeTab === 'atco' }]"
+              @click="activeTab = 'atco'"
+            >
+              ATCO
+              <span v-if="alertCount > 0" class="role-count atco-count">{{ alertCount }}</span>
+            </button>
           </div>
-          <div class="alerts-section">
-            <AlertPanel />
+
+          <!-- Tab panels -->
+          <div class="tab-panel" v-show="activeTab === 'supervisor'">
+            <SupervisorPanel />
+          </div>
+
+          <div class="tab-panel" v-show="activeTab === 'fdo'">
+            <FdoPanel />
+          </div>
+
+          <div class="tab-panel" v-show="activeTab === 'atco'">
+            <div class="profile-section">
+              <FlightProfile />
+            </div>
+            <div class="alerts-section">
+              <AlertPanel />
+            </div>
           </div>
         </div>
       </aside>
@@ -332,7 +368,62 @@ onMounted(() => {
   border: 2px solid #0d1117;
 }
 
-/* Sidebar inner panels */
+/* ── Role selector pill bar ──────────────────────────────────────────────── */
+.role-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+}
+
+.role-pill {
+  flex: 1;
+  height: 28px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 14px;
+  border: 1px solid #21262d;
+  background: transparent;
+  color: #484f58;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.role-pill:hover  { color: #8b949e; border-color: #30363d; }
+.role-pill.active { background: #1f6feb; color: #ffffff; border-color: #1f6feb; }
+
+/* Inline badge inside pill — no floating superscript (clips in mobile drawer) */
+.role-count {
+  font-size: 9px;
+  font-weight: 800;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+}
+/* Alert-state colors reserved for data — not applied to active pill background */
+.fdo-count  { background: rgba(255,140,0,0.25); color: #ff8c00; }
+.atco-count { background: rgba(248,81,73,0.2);  color: #f85149; }
+.role-pill.active .fdo-count  { background: rgba(255,140,0,0.3); }
+.role-pill.active .atco-count { background: rgba(248,81,73,0.3); }
+
+.tab-panel {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sidebar inner panels (inside ATCO tab) */
 .profile-section {
   flex: 0 0 42%;
   border-bottom: 1px solid #21262d;

@@ -22,9 +22,12 @@ function makeFlight(overrides: Partial<Flight> = {}): Flight {
     longitude: 4.5,
     altitudeFt: 35000,
     speedKnots: 450,
+    heading: 90,
     contrailDetected: false,
     issrZone: false,
     alert: null,
+    approachingZoneId: null,
+    approachingMinutes: null,
     timestamp: new Date().toISOString(),
     ...overrides,
   }

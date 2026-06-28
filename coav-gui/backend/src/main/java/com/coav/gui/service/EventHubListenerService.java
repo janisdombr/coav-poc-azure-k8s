@@ -122,6 +122,7 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
                 .longitude(adsb.getLongitude())
                 .altitudeFt(adsb.getAltitudeFt())
                 .speedKnots(adsb.getSpeedKnots())
+                .heading(adsb.getHeading() != null ? adsb.getHeading() : 0.0)
                 .contrailDetected(contrail)
                 .issrZone(inIssr)
                 .alert(alert)

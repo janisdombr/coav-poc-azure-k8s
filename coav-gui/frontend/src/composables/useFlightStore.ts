@@ -1,27 +1,32 @@
 import { ref, computed } from 'vue'
 import { Client } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
-import type { Flight, IssrZone } from '../types/flight'
+import type { Flight, IssrZone, Advisory } from '../types/flight'
 
-const flights = ref<Flight[]>([])
-const issrZones = ref<IssrZone[]>([])
-const connected = ref(false)
+const flights      = ref<Flight[]>([])
+const issrZones    = ref<IssrZone[]>([])
+const advisories   = ref<Advisory[]>([])
+const connected    = ref(false)
+const goAuthorized = ref(true)   // Supervisor GO/NOGO toggle
 
 let initialized = false
 
-// In cloud: window.BACKEND_URL = 'https://coav-backend.<hash>.westeurope.azurecontainerapps.io'
-//           injected by nginx /config.js at container startup
-// In local dev (Vite proxy): window.BACKEND_URL is undefined → use relative paths
+// Cloud: window.BACKEND_URL injected by nginx /config.js at container startup
+// Local dev (Vite proxy): undefined → use relative paths
 const backendUrl: string = (window as any).BACKEND_URL || ''
 
 const criticalFlights = computed(() =>
   flights.value
     .filter(f => f.alert !== null)
     .sort((a, b) => {
-      if (a.alert === 'CRITICAL' && b.alert !== 'CRITICAL') return -1
-      if (b.alert === 'CRITICAL' && a.alert !== 'CRITICAL') return 1
-      return 0
+      const rank = (alert: string | null) =>
+        alert === 'CRITICAL' ? 0 : alert === 'APPROACHING' ? 1 : 2
+      return rank(a.alert) - rank(b.alert)
     })
+)
+
+const approachingFlights = computed(() =>
+  flights.value.filter(f => f.alert === 'APPROACHING')
 )
 
 async function fetchIssrZones(): Promise<void> {
@@ -34,9 +39,33 @@ async function fetchIssrZones(): Promise<void> {
   }
 }
 
+async function fetchAdvisories(): Promise<void> {
+  try {
+    const res = await fetch(`${backendUrl}/api/advisory`)
+    if (!res.ok) return
+    advisories.value = (await res.json()) as Advisory[]
+  } catch {
+    // non-critical — advisories arrive via WebSocket too
+  }
+}
+
+async function acceptAdvisory(advisoryId: string): Promise<void> {
+  await fetch(`${backendUrl}/api/advisory/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ advisoryId }),
+  })
+}
+
+async function rejectAdvisory(advisoryId: string): Promise<void> {
+  await fetch(`${backendUrl}/api/advisory/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ advisoryId }),
+  })
+}
+
 function connectStomp(): void {
-  // In cloud: connect directly to backend WebSocket URL (bypasses nginx proxy)
-  // In local dev: use relative /ws (proxied by Vite to :8080)
   const wsUrl = backendUrl ? `${backendUrl}/ws` : '/ws'
 
   const client = new Client({
@@ -46,6 +75,9 @@ function connectStomp(): void {
       connected.value = true
       client.subscribe('/topic/flights', (msg) => {
         flights.value = JSON.parse(msg.body) as Flight[]
+      })
+      client.subscribe('/topic/advisories', (msg) => {
+        advisories.value = JSON.parse(msg.body) as Advisory[]
       })
     },
     onDisconnect: () => {
@@ -59,10 +91,15 @@ function init(): void {
   if (initialized) return
   initialized = true
   fetchIssrZones()
+  fetchAdvisories()
   connectStomp()
 }
 
 export function useFlightStore() {
   init()
-  return { flights, issrZones, connected, criticalFlights }
+  return {
+    flights, issrZones, advisories, connected, goAuthorized,
+    criticalFlights, approachingFlights,
+    acceptAdvisory, rejectAdvisory,
+  }
 }

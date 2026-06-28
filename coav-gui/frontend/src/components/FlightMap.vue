@@ -5,23 +5,28 @@ import 'leaflet/dist/leaflet.css'
 import { useFlightStore } from '../composables/useFlightStore'
 import type { Flight, IssrZone } from '../types/flight'
 
-const { flights, issrZones } = useFlightStore()
+const { flights, issrZones, approachingFlights } = useFlightStore()
 
 const mapEl = ref<HTMLDivElement | null>(null)
 let map: L.Map | null = null
-const markerMap = new Map<string, L.CircleMarker>()
+const markerMap   = new Map<string, L.CircleMarker>()
+const approachMap = new Map<string, L.Polyline>()   // dashed lines to ISSR zones
 let zonesDrawn = false
 
 function alertColor(alert: Flight['alert']): string {
-  if (alert === 'CRITICAL') return '#ff4444'
-  if (alert === 'WARNING') return '#ffaa00'
+  if (alert === 'CRITICAL')   return '#ff4444'
+  if (alert === 'APPROACHING') return '#ff8c00'
+  if (alert === 'WARNING')    return '#ffaa00'
   return '#44ff88'
 }
 
 function flightTooltip(f: Flight): string {
-  const fl = Math.round(f.altitudeFt / 100)
+  const fl     = Math.round(f.altitudeFt / 100)
   const status = f.alert ?? 'NORMAL'
-  return `<b>${f.flightId}</b><br>FL${fl} · ${f.speedKnots} kt<br>${status}`
+  const eta    = f.alert === 'APPROACHING' && f.approachingMinutes != null
+    ? ` · Zone ${f.approachingZoneId} in ${f.approachingMinutes} min`
+    : ''
+  return `<b>${f.flightId}</b><br>FL${fl} · ${f.speedKnots} kt<br>${status}${eta}`
 }
 
 function drawZones(zones: IssrZone[]): void {
@@ -52,7 +57,7 @@ function updateMarkers(current: Flight[]): void {
   })
 
   current.forEach(flight => {
-    const color = alertColor(flight.alert)
+    const color   = alertColor(flight.alert)
     const tooltip = flightTooltip(flight)
     const existing = markerMap.get(flight.flightId)
     if (existing) {
@@ -70,6 +75,35 @@ function updateMarkers(current: Flight[]): void {
         .bindTooltip(tooltip, { permanent: false })
         .addTo(map!)
       markerMap.set(flight.flightId, marker)
+    }
+
+    // Dashed approach line from flight to center of target ISSR zone
+    if (flight.alert === 'APPROACHING' && flight.approachingZoneId) {
+      const zone = issrZones.value.find(z => z.id === flight.approachingZoneId)
+      if (zone) {
+        const zoneCenterLat = (zone.minLat + zone.maxLat) / 2
+        const zoneCenterLon = (zone.minLon + zone.maxLon) / 2
+        const existingLine  = approachMap.get(flight.flightId)
+        const latlngs: L.LatLngTuple[] = [
+          [flight.latitude, flight.longitude],
+          [zoneCenterLat, zoneCenterLon],
+        ]
+        if (existingLine) {
+          existingLine.setLatLngs(latlngs)
+        } else {
+          const line = L.polyline(latlngs, {
+            color: '#ff8c00',
+            weight: 1.5,
+            dashArray: '6 5',
+            opacity: 0.7,
+          }).addTo(map!)
+          approachMap.set(flight.flightId, line)
+        }
+      }
+    } else {
+      // Remove stale approach line if flight no longer approaching
+      approachMap.get(flight.flightId)?.remove()
+      approachMap.delete(flight.flightId)
     }
   })
 }

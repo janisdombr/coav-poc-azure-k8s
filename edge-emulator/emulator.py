@@ -16,6 +16,7 @@ class ADSBTelemetry(BaseModel):
     longitude: float = Field(..., ge=-180.0, le=180.0)
     altitude_ft: int = Field(..., ge=0, le=60000)
     speed_knots: int = Field(..., ge=0, le=1000)
+    heading: float | None = Field(None, ge=0.0, le=360.0)
     camera_id: str | None = Field(None, min_length=3, max_length=20)
     contrail_detected: bool | None = None
     confidence_score: float | None = Field(None, ge=0.0, le=1.0)
@@ -80,6 +81,22 @@ DEP_END      = (52.50, 4.20)
 DEP_DURATION = 600
 
 
+def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """True bearing in degrees (0=N, 90=E) from point A to point B."""
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2 - lon1
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+# Pre-compute fixed headings per transit route (mirrors FlightSimulatorService.ROUTE_HEADINGS)
+ROUTE_HEADINGS = [
+    _bearing(ROUTES[i][0], ROUTES[i][1], ROUTES[i][2], ROUTES[i][3])
+    for i in range(len(ROUTES))
+]
+DEP_HEADING = _bearing(DEP_START[0], DEP_START[1], DEP_END[0], DEP_END[1])
+
+
 # ── Mutable simulator state ────────────────────────────────────────────────────
 
 def make_callsign(route_idx: int, airline_idx: int) -> str:
@@ -110,7 +127,7 @@ def build_payloads() -> list[dict]:
 
     tick += 1
     iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    active_aircraft: list[tuple] = []  # (flight_id, lat, lon, alt, speed)
+    active_aircraft: list[tuple] = []  # (flight_id, lat, lon, alt, speed, heading)
 
     # ── 1. Transit flights ─────────────────────────────────────────────────────
     for i in range(len(ROUTES)):
@@ -134,7 +151,7 @@ def build_payloads() -> list[dict]:
         lat = ROUTES[i][0] + t * (ROUTES[i][2] - ROUTES[i][0])
         lon = ROUTES[i][1] + t * (ROUTES[i][3] - ROUTES[i][1])
         alt = ALTITUDES[i] + int(math.sin(tick * 0.003 + i) * 200)
-        active_aircraft.append((route_flight_id[i], lat, lon, alt, SPEEDS[i]))
+        active_aircraft.append((route_flight_id[i], lat, lon, alt, SPEEDS[i], ROUTE_HEADINGS[i]))
 
     # ── 2. Holding stacks (fixed callsign, endless orbit) ─────────────────────
     for h in range(len(HOLDS)):
@@ -142,7 +159,10 @@ def build_payloads() -> list[dict]:
         lat   = HOLDS[h][0] + HOLDS[h][2] * math.sin(angle)
         lon   = HOLDS[h][1] + HOLDS[h][3] * math.cos(angle)
         alt   = HOLD_ALTS[h] + int(math.sin(tick * 0.002 + h) * 100)
-        active_aircraft.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h]))
+        r_lat = HOLDS[h][2]
+        r_lon = HOLDS[h][3]
+        hdg   = (math.degrees(math.atan2(-r_lon * math.sin(angle), r_lat * math.cos(angle))) + 360) % 360
+        active_aircraft.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], round(hdg, 1)))
 
     # ── 3. Departure (one-shot) ────────────────────────────────────────────────
     if not dep_done:
@@ -152,13 +172,13 @@ def build_payloads() -> list[dict]:
         lon = DEP_START[1] + t * (DEP_END[1] - DEP_START[1])
         alt = int(10000 + (t / 0.4) * 25000) if t < 0.4 else 35000 + int(math.sin(tick * 0.003) * 100)
         spd = int(280 + (t / 0.4) * 195) if t < 0.4 else 475
-        active_aircraft.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475)))
+        active_aircraft.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475), DEP_HEADING))
         if dep_progress >= DEP_DURATION:
             dep_done = True
 
     # ── Build event pairs (ADSB + EDGE_VISION_AI) for each aircraft ───────────
     events: list[dict] = []
-    for fid, lat, lon, alt, spd in active_aircraft:
+    for fid, lat, lon, alt, spd, hdg in active_aircraft:
         in_zone = is_inside_critical_zone(lat, lon, alt)
         conf    = round(0.91 + 0.05 * math.sin(tick * 0.1), 2) if in_zone else 0.95
 
@@ -170,6 +190,7 @@ def build_payloads() -> list[dict]:
             "longitude": round(lon, 5),
             "altitude_ft": alt,
             "speed_knots": spd,
+            "heading": round(hdg, 1),
         })
         events.append({
             "message_type": "EDGE_VISION_AI",
