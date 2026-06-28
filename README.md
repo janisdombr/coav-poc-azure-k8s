@@ -84,7 +84,7 @@ terraform destroy -auto-approve
 <img src="images/tf-destroy.png" width="457" />
 
 ## Next step - backend -->
-[Backend Readme.md](coav-gui/backend/README.md)
+[Backend Readme.md](backend/README.md)
 
 ## After backend test try Databricks
 
@@ -328,12 +328,13 @@ coav-poc-azure-k8s/
 │   ├── node/capture.js              — Node.js: USB webcam → Event Hub
 │   └── python/capture.py            — Python: Pi Camera → Event Hub
 ├── backend/
-│   └── main.py                      — Python K8s backend (stream join, OWASP A03)
+│   └── main.py                      — Python K8s backend v1 (initial prototype; superseded by
+│                                      coav-gui/backend once the Java requirement was found in the spec)
 ├── coav-gui/
 │   ├── backend/                     — Java Spring Boot 3 (43 tests, mock + EventHub modes)
 │   └── frontend/                    — Vue 3 + Vite + TypeScript
-│       ├── Dockerfile               — nginx multi-stage, BACKEND_URL via envsubst
-│       └── nginx.conf               — proxy /api and /ws to backend
+│       ├── Dockerfile               — nginx multi-stage, BACKEND_URL injected at runtime
+│       └── nginx.conf               — serves /config.js with backend URL for direct browser calls
 └── k8s/
     └── coav-gui-backend-deployment.yaml
 ```
