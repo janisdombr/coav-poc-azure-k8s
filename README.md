@@ -84,7 +84,7 @@ terraform destroy -auto-approve
 <img src="images/tf-destroy.png" width="457" />
 
 ## Next step - backend -->
-[Backend Readme.md](backend/README.md)
+[Backend Readme.md](backend/Readme.md)
 
 ## After backend test try Databricks
 

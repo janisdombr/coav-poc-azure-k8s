@@ -44,15 +44,19 @@ resource "null_resource" "update_apps" {
     command     = <<-EOT
       set -e
       echo "==> Updating Container Apps with latest images..."
+      DEPLOY_TIME=$(date -u +%Y%m%dT%H%M%SZ)
+
       az containerapp update \
         --name coav-backend \
         --resource-group ${data.azurerm_resource_group.coav.name} \
-        --image ${azurerm_container_registry.coav.login_server}/coav-backend:latest
+        --image ${azurerm_container_registry.coav.login_server}/coav-backend:latest \
+        --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
 
       az containerapp update \
         --name coav-frontend \
         --resource-group ${data.azurerm_resource_group.coav.name} \
-        --image ${azurerm_container_registry.coav.login_server}/coav-frontend:latest
+        --image ${azurerm_container_registry.coav.login_server}/coav-frontend:latest \
+        --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
 
       echo "==> Container Apps updated."
     EOT
