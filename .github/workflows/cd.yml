@@ -3,6 +3,9 @@ name: CD — Deploy to Azure
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'images/**'
 
 # Only one deployment runs at a time; queue the next, cancel obsolete ones.
 concurrency:
