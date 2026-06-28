@@ -12,17 +12,27 @@ _(URL printed by `terraform output demo_url` after cloud deployment)_
 ## Architecture
 
 ```
-[Raspberry Pi / ACI]               [Azure]                         [ATC Operator]
+[Raspberry Pi / ACI]               [Azure]                         [3-tier ATC Workflow]
   edge-emulator/emulator.py  →  Event Hub (telemetry-adsb-inbound)  →  Vue 3 GUI
-  edge-pi/node/capture.js    ↗  Spring Boot backend                     Leaflet map
-                                 FlightStateStore (5-min TTL)            Chart.js
-                                 WebSocket /topic/flights                AlertPanel
-                                 POST /api/correction
+  edge-pi/node/capture.js    ↗  Spring Boot backend                     Supervisor  — GO/NOGO
+                                 FlightStateStore (5-min TTL)            FDO         — advisory queue
+                                 trajectory projection (+20 min)         ATCO        — corrections
+                                 AdvisoryService (auto-generate)         Leaflet map / Chart.js
+                                 WebSocket broadcast every 2s
 ```
 
 **ISSR zones — single source of truth in `FlightStateStore.ISSR_ZONES`:**
 - Zone Alpha: lat 50.20–51.00, lon 3.80–5.40, FL330–FL380 (Brussels convergence)
 - Zone Bravo: lat 51.30–52.50, lon 5.80–8.20, FL310–FL370 (Dutch-German border)
+
+**Alert states (enriched in `FlightStateStore.enrichAlert()`):**
+
+| State | Condition |
+|---|---|
+| `CRITICAL` | Flight is currently inside ISSR zone |
+| `APPROACHING` | Trajectory projection shows entry within 20 min |
+| `WARNING` | Contrail detected, not yet in/approaching ISSR |
+| `null` | Normal |
 
 ---
 
@@ -190,7 +200,7 @@ curl http://localhost:8080/api/flights
 
 Full command reference → [coav-gui/backend/README.md](coav-gui/backend/README.md)
 
-## Run backend tests (43 tests, no Maven install needed)
+## Run backend tests (44 tests, no Maven install needed)
 
 ```sh
 docker run --rm -v "$PWD/coav-gui/backend":/build -w /build \
@@ -208,7 +218,7 @@ npm install   # once
 npm run dev   # → http://localhost:5173 (proxy /api and /ws → :8080)
 ```
 
-<img src="images/frontend.png" width="1440" />
+<img src="images/frontend.png" width="1428" />
 
 ---
 
@@ -280,20 +290,30 @@ cd terraform && terraform destroy -auto-approve
 
 ## API reference
 
+### Flight data
+
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/flights` | Active flights (5-min window, sorted newest first) |
-| GET | `/api/issr-zones` | ISSR zone definitions (ALPHA + BRAVO) |
-| POST | `/api/correction` | FL correction — OWASP A03 validation, broadcasts to `/topic/corrections` |
+| GET | `/api/flights` | Active flights (5-min TTL, sorted newest first). Each flight includes `alert` (`CRITICAL` / `APPROACHING` / `WARNING` / null), `heading` (degrees), `approachingZoneId`, `approachingMinutes`. |
+| GET | `/api/issr-zones` | ISSR zone definitions (ALPHA + BRAVO) with lat/lon/alt bounds and severity. |
+
+### 3-tier ATC workflow
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/advisory` | Pending advisories for FDO review. Auto-generated when a flight is `APPROACHING`. |
+| POST | `/api/advisory/accept` | FDO accepts advisory `{ "advisoryId": "<uuid>" }`. Clears from queue, broadcasts. Blocked by Supervisor NO GO on frontend. |
+| POST | `/api/advisory/reject` | FDO rejects advisory. Flight enters 5-min cooldown — no new advisory until cooldown expires. |
+| POST | `/api/correction` | ATCO issues FL correction `{ "flightId", "newAltitudeFt", "reason" }`. OWASP A03 validated, rate-limited 10 req/min per IP. |
 
 **WebSocket topics (STOMP over SockJS `/ws`):**
-- `/topic/flights` — live flight state, pushed every 2 s
-- `/topic/corrections` — ATC instruction acknowledgement
+- `/topic/flights` — full flight list, pushed every 2 s by `FlightStateStore`
+- `/topic/advisories` — pending advisory list, pushed on any change
+- `/topic/corrections` — correction acknowledgement after ATCO action
 
-**Correction flow:** `POST /api/correction` validates input (OWASP A03), returns `CorrectionResult`,
-and broadcasts the acknowledgement via WebSocket to `/topic/corrections`. It does **not** write to
-Event Hub and does **not** modify the simulator trajectory (PoC scope). A production system would
-publish to a second Event Hub entity (`atc-commands`) for the aircraft to consume.
+**Advisory flow:** `FlightStateStore.enrichAlert()` runs flat-earth trajectory projection (20 one-minute steps). On `APPROACHING`, `AdvisoryService` auto-generates one advisory per flight with recommended FL±2000ft. FDO accepts or rejects; accepted advisories enable the ATCO correction form. Rejected flights are suppressed for 5 min. Advisory does **not** modify simulator trajectory (PoC scope).
+
+**Correction flow:** `POST /api/correction` validates input (OWASP A03), enforces sliding-window rate limit (OWASP A04), returns `CorrectionResult`, broadcasts via WebSocket. Does **not** write to Event Hub (production would publish to `atc-commands` hub entity).
 
 ---
 
@@ -331,7 +351,7 @@ coav-poc-azure-k8s/
 │   └── main.py                      — Python K8s backend v1 (initial prototype; superseded by
 │                                      coav-gui/backend once the Java requirement was found in the spec)
 ├── coav-gui/
-│   ├── backend/                     — Java Spring Boot 3 (43 tests, mock + EventHub modes)
+│   ├── backend/                     — Java Spring Boot 3 (44 tests, mock + EventHub modes)
 │   └── frontend/                    — Vue 3 + Vite + TypeScript
 │       ├── Dockerfile               — nginx multi-stage, BACKEND_URL injected at runtime
 │       └── nginx.conf               — serves /config.js with backend URL for direct browser calls
