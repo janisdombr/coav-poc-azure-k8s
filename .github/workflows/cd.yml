@@ -1,0 +1,61 @@
+name: CD — Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+
+# Only one deployment runs at a time; queue the next, cancel obsolete ones.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # Re-run CI checks so the deploy job has a clean green gate.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build, push, update Container Apps
+    runs-on: ubuntu-latest
+    needs: ci
+    environment: production   # requires manual approval if configured in GitHub
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: ACR login
+        run: az acr login --name acrcoavpoc
+
+      - name: Build and push all images
+        run: |
+          docker build -t acrcoavpoc.azurecr.io/coav-emulator:latest ./edge-emulator
+          docker push acrcoavpoc.azurecr.io/coav-emulator:latest
+
+          docker build -t acrcoavpoc.azurecr.io/coav-backend:latest ./coav-gui/backend
+          docker push acrcoavpoc.azurecr.io/coav-backend:latest
+
+          docker build -t acrcoavpoc.azurecr.io/coav-frontend:latest ./coav-gui/frontend
+          docker push acrcoavpoc.azurecr.io/coav-frontend:latest
+
+      - name: Update Container Apps
+        run: |
+          DEPLOY_TIME=$(date -u +%Y%m%dT%H%M%SZ)
+          az containerapp update \
+            --name coav-backend \
+            --resource-group rg-coav-poc-prod \
+            --image acrcoavpoc.azurecr.io/coav-backend:latest \
+            --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
+
+          az containerapp update \
+            --name coav-frontend \
+            --resource-group rg-coav-poc-prod \
+            --image acrcoavpoc.azurecr.io/coav-frontend:latest \
+            --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
+
+      - name: Print demo URL
+        run: echo "https://coav-frontend.victoriouscliff-165b8274.westeurope.azurecontainerapps.io"

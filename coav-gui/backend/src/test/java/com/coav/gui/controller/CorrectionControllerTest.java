@@ -1,6 +1,7 @@
 package com.coav.gui.controller;
 
 import com.coav.gui.model.Correction;
+import com.coav.gui.service.CorrectionRateLimiter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +11,10 @@ import org.springframework.http.MediaType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.junit.jupiter.api.BeforeEach;
+
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -24,6 +29,23 @@ class CorrectionControllerTest {
 
     @MockBean
     SimpMessagingTemplate messagingTemplate;
+
+    @MockBean
+    CorrectionRateLimiter rateLimiter;
+
+    @BeforeEach
+    void allowRateLimit() {
+        when(rateLimiter.allow(anyString())).thenReturn(true);
+    }
+
+    @Test
+    void postCorrection_rateLimitExceeded_returns429() throws Exception {
+        when(rateLimiter.allow(anyString())).thenReturn(false);
+        mvc.perform(post("/api/correction")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"flightId\":\"C100-CLB\",\"newAltitudeFt\":35000}"))
+            .andExpect(status().isTooManyRequests());
+    }
 
     @Test
     void postCorrection_validPayload_returnsAccepted() throws Exception {
