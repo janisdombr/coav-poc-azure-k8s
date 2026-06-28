@@ -2,7 +2,7 @@
 
 EUROCONTROL MUAC · Contract ECTL_SRC_260028
 
-**Live demo:** `https://coav-frontend.victoriouscliff-165b8274.westeurope.azurecontainerapps.io`
+**Live demo:** [Backend Readme.md](`https://coav.dombrovski.lv`)
 
 API url: `https://coav-backend.victoriouscliff-165b8274.westeurope.azurecontainerapps.io/api/flights`
 _(URL printed by `terraform output demo_url` after cloud deployment)_
