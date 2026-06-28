@@ -3,13 +3,46 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'images/**'
   pull_request:
     branches: [main]
-  workflow_call:  # allows cd.yml to call this as a reusable workflow
+    paths-ignore:
+      - '**.md'
+      - 'images/**'
+  workflow_call:  # called from cd.yml — always runs everything
 
 jobs:
+  # Detect which parts of the codebase changed.
+  # When triggered via workflow_call (CD deploy), all outputs are forced to true.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend:  ${{ github.event_name == 'workflow_call' || steps.filter.outputs.backend == 'true' }}
+      frontend: ${{ github.event_name == 'workflow_call' || steps.filter.outputs.frontend == 'true' }}
+      emulator: ${{ github.event_name == 'workflow_call' || steps.filter.outputs.emulator == 'true' }}
+      k6:       ${{ github.event_name == 'workflow_call' || steps.filter.outputs.k6 == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'coav-gui/backend/**'
+            frontend:
+              - 'coav-gui/frontend/**'
+            emulator:
+              - 'edge-emulator/**'
+            k6:
+              - 'k6/**'
+              - 'coav-gui/backend/**'
+
   backend-tests:
     name: Backend — Maven (44 tests)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +57,8 @@ jobs:
 
   frontend-build:
     name: Frontend — TypeScript + build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +83,8 @@ jobs:
 
   emulator-tests:
     name: Emulator — pytest (22 tests)
+    needs: changes
+    if: needs.changes.outputs.emulator == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,8 +105,12 @@ jobs:
 
   k6-smoke:
     name: k6 smoke — API endpoints
+    needs: [changes, backend-tests]
+    # Run if k6 or backend paths changed AND backend either passed or was skipped (paths unchanged)
+    if: |
+      needs.changes.outputs.k6 == 'true' &&
+      (needs.backend-tests.result == 'success' || needs.backend-tests.result == 'skipped')
     runs-on: ubuntu-latest
-    needs: backend-tests
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +121,6 @@ jobs:
             -e SPRING_PROFILES_ACTIVE=mock \
             --name coav-backend-ci \
             coav-backend-ci
-          # Wait for Spring Boot to be ready
           for i in $(seq 1 30); do
             curl -sf http://localhost:8080/api/issr-zones && break
             sleep 2
