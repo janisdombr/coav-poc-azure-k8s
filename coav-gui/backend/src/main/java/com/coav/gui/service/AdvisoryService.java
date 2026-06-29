@@ -45,12 +45,13 @@ public class AdvisoryService {
                 if (Instant.now().isBefore(cooldown)) return;
                 cooldownUntil.remove(flight.getFlightId()); // cooldown expired
             }
-            // Only generate once per approach (don't spam advisories)
-            pending.computeIfAbsent(flight.getFlightId(), id -> {
-                Advisory adv = generate(flight);
+            // Only generate once per approach (don't spam advisories).
+            // putIfAbsent returns null when newly inserted — broadcast AFTER insert
+            // so pending already contains the advisory when WebSocket clients receive it.
+            Advisory prev = pending.putIfAbsent(flight.getFlightId(), generate(flight));
+            if (prev == null) {
                 broadcast();
-                return adv;
-            });
+            }
         } else {
             // Flight left the approaching state without FDO action — remove silently
             if (pending.containsKey(flight.getFlightId())) {

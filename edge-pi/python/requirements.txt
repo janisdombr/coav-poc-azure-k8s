@@ -1,0 +1,28 @@
+# COAV Edge Capture — Raspberry Pi Python dependencies
+# Install: pip install -r requirements.txt
+
+# Azure Event Hub
+azure-eventhub==5.12.2
+
+# Inference runtime (choose one — ONNX is recommended for Raspberry Pi ARM)
+onnxruntime==1.20.1            # CPU-optimised; ~30 MB; use this on Pi
+# onnxruntime-gpu==1.20.1      # uncomment if NVIDIA GPU is available
+
+# Segmentation model (required for training and PyTorch inference fallback)
+segmentation-models-pytorch==0.3.4
+torch==2.3.1                   # CPU-only wheel for Pi: install via torch.org ARM builds
+torchvision==0.18.1
+
+# Computer vision
+opencv-python-headless==4.10.0.84   # headless = no GUI dependencies (safe for Pi)
+numpy==1.26.4
+Pillow==10.4.0
+
+# Raspberry Pi Camera Module 3 (only needed on real Pi hardware)
+# picamera2==0.3.21            # install via: sudo apt install python3-picamera2
+
+# Data validation (OWASP A03)
+pydantic==2.8.2
+
+# Training only (not needed at inference time)
+# matplotlib==3.9.0

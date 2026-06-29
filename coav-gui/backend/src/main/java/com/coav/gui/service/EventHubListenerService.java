@@ -62,6 +62,36 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
     }
 
     private void consume() {
+        // Reconnect loop: if the AMQP consumer fails (e.g. "max receivers per partition"
+        // after container restarts), wait for Azure to release stale links, then retry.
+        // Azure Event Hub Standard: max 5 receivers per partition per consumer group;
+        // a 30-second pause is enough for Azure to expire unreleased AMQP links.
+        int  attempt   = 0;
+        long backoffMs = 5_000;
+
+        while (running.get() && !Thread.currentThread().isInterrupted()) {
+            attempt++;
+            log.info("[EVENT HUB] Connecting (attempt {}) …", attempt);
+            try {
+                consumeOnce();
+                // consumeOnce() returns only on clean shutdown (running=false)
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                log.error("[EVENT HUB] Consumer error (attempt {}): {}", attempt, e.getMessage());
+                if (!running.get()) break;
+                log.info("[EVENT HUB] Reconnecting in {} s …", backoffMs / 1000);
+                try { Thread.sleep(backoffMs); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt(); break;
+                }
+                backoffMs = Math.min(backoffMs * 2, 60_000);  // cap at 60 s
+            }
+        }
+        log.info("[EVENT HUB] Consumer stopped after {} attempt(s).", attempt);
+    }
+
+    private void consumeOnce() throws Exception {
         try (EventHubConsumerClient client = new EventHubClientBuilder()
                 .connectionString(connectionString)
                 .consumerGroup(EventHubClientBuilder.DEFAULT_CONSUMER_GROUP_NAME)
@@ -69,7 +99,7 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
 
             List<String> partitionIds = new ArrayList<>();
             client.getPartitionIds().forEach(partitionIds::add);
-            log.info("[EVENT HUB] Partitions: {}", partitionIds);
+            log.info("[EVENT HUB] Connected. Partitions: {}", partitionIds);
 
             // Start from events enqueued within the last 15 minutes — skip stale history
             Instant cutoffEnqueueTime = Instant.now().minus(java.time.Duration.ofMinutes(15));
@@ -90,8 +120,7 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
                         });
                 }
             }
-        } catch (Exception e) {
-            log.error("[EVENT HUB] Consumer error: {}", e.getMessage(), e);
+            // try-with-resources calls client.close() → AMQP link released cleanly before next attempt
         }
     }
 

@@ -52,6 +52,16 @@ const trajectoryPoints = computed(() => {
   return [{ x: -5, y: fl }, { x: 0, y: fl }, { x: 25, y: fl }]
 })
 
+// For CRITICAL flights: find which zone they're in by altitude match
+const criticalZone = computed(() => {
+  const f = selectedFlight.value
+  if (!f || f.alert !== 'CRITICAL') return null
+  const fl = Math.round(f.altitudeFt / 100)
+  return issrZones.value.find(z =>
+    fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100)
+  ) ?? null
+})
+
 const annotations = computed(() => {
   const result: Record<string, object> = {}
 
@@ -72,7 +82,34 @@ const annotations = computed(() => {
   }
 
   const f = selectedFlight.value
-  if (!f || !f.approachingZoneId) return result
+  if (!f) return result
+
+  // CRITICAL: aircraft already inside the zone — show it spanning the full time range
+  if (f.alert === 'CRITICAL' && criticalZone.value) {
+    const zone = criticalZone.value
+    const zoneMinFl = Math.round(zone.minAlt / 100)
+    const zoneMaxFl = Math.round(zone.maxAlt / 100)
+    result['issrCritical'] = {
+      type: 'box',
+      xMin: -5, xMax: 25,
+      yMin: zoneMinFl,
+      yMax: zoneMaxFl,
+      backgroundColor: 'rgba(248,81,73,0.12)',
+      borderColor: 'rgba(248,81,73,0.45)',
+      borderWidth: 1,
+      label: {
+        display: true,
+        content: `Inside Zone ${zone.id}`,
+        color: '#f85149',
+        font: { size: 9, weight: 'bold' },
+        position: { x: 'center', y: 'start' },
+        yAdjust: 6
+      }
+    }
+    return result
+  }
+
+  if (!f.approachingZoneId) return result
 
   const zone = issrZones.value.find(z => z.id === f.approachingZoneId)
   if (!zone) return result
@@ -132,19 +169,20 @@ const chartData = computed(() => ({
   }]
 }))
 
-const flMin = computed(() => {
-  const zone = selectedFlight.value?.approachingZoneId
-    ? issrZones.value.find(z => z.id === selectedFlight.value!.approachingZoneId)
-    : null
-  return zone ? Math.round(zone.minAlt / 100) - 20 : 290
-})
+const activeZone = computed(() =>
+  criticalZone.value ??
+  (selectedFlight.value?.approachingZoneId
+    ? issrZones.value.find(z => z.id === selectedFlight.value!.approachingZoneId) ?? null
+    : null)
+)
 
-const flMax = computed(() => {
-  const zone = selectedFlight.value?.approachingZoneId
-    ? issrZones.value.find(z => z.id === selectedFlight.value!.approachingZoneId)
-    : null
-  return zone ? Math.round(zone.maxAlt / 100) + 20 : 420
-})
+const flMin = computed(() =>
+  activeZone.value ? Math.round(activeZone.value.minAlt / 100) - 20 : 290
+)
+
+const flMax = computed(() =>
+  activeZone.value ? Math.round(activeZone.value.maxAlt / 100) + 20 : 420
+)
 
 const chartOptions = computed(() => ({
   responsive: true,

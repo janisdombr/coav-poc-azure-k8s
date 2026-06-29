@@ -119,3 +119,9 @@ coav-gui/frontend/.env.*
 
 # edge-pi Node deps
 edge-pi/node/node_modules/
+# ML datasets and model weights (large binary files — download separately)
+# GVCCS dataset: https://zenodo.org/records/15743988  (2.1 GB)
+# Pre-trained weights: https://surfdrive.surf.nl/files/index.php/s/n1b0L2qfu2PZ6d3
+edge-pi/data/
+edge-pi/python/weights/
+edge-pi/python/sample_synthetic.jpg
