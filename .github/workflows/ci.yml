@@ -116,7 +116,7 @@ jobs:
           cache-dependency-path: edge-pi/python/requirements.txt
 
       - name: Install inference dependencies (no torch — opencv + pydantic only)
-        run: pip install opencv-python-headless numpy pydantic azure-eventhub
+        run: pip install opencv-python-headless numpy pydantic azure-eventhub pytest
 
       - name: Run pytest
         run: python -m pytest test_inference.py test_capture.py -v
