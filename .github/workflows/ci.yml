@@ -81,6 +81,23 @@ jobs:
         run: npm test
         working-directory: coav-gui/frontend
 
+      - name: No hardcoded relative /api fetch calls
+        working-directory: coav-gui/frontend
+        run: |
+          # Every fetch('/api...) in src/ must use ${backendUrl}/api/... instead.
+          # In production, nginx does not proxy /api — the frontend must call the
+          # backend directly via window.BACKEND_URL injected by /config.js.
+          # Excludes: test files (__tests__/) and comment lines (leading * or //)
+          if grep -rn "fetch(['\`]/api" src/ \
+               --include="*.ts" --include="*.vue" \
+               --exclude-dir="__tests__" \
+             | grep -v '^\s*\*' | grep -v '^\s*//'; then
+            echo ""
+            echo "ERROR: Found relative /api fetch URL."
+            echo "Use \${backendUrl}/api/... where backendUrl comes from useFlightStore()."
+            exit 1
+          fi
+
   emulator-tests:
     name: Emulator — pytest (22 tests)
     needs: changes
@@ -102,6 +119,59 @@ jobs:
       - name: Run pytest
         run: python -m pytest test_emulator.py -v
         working-directory: edge-emulator
+
+  playwright-e2e:
+    name: Playwright E2E — 14 tests (Chromium)
+    needs: [changes, backend-tests, frontend-build]
+    if: |
+      (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true') &&
+      (needs.backend-tests.result == 'success' || needs.backend-tests.result == 'skipped') &&
+      (needs.frontend-build.result == 'success' || needs.frontend-build.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start backend in mock mode
+        run: |
+          docker build -t coav-backend-e2e ./coav-gui/backend
+          docker run -d -p 8080:8080 \
+            -e SPRING_PROFILES_ACTIVE=mock \
+            --name coav-backend-e2e \
+            coav-backend-e2e
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/api/issr-zones && break
+            sleep 2
+          done
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: coav-gui/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: coav-gui/frontend
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+        working-directory: coav-gui/frontend
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+        working-directory: coav-gui/frontend
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: coav-gui/frontend/playwright-report/
+          retention-days: 7
+
+      - name: Stop backend
+        if: always()
+        run: docker rm -f coav-backend-e2e || true
 
   k6-smoke:
     name: k6 smoke — API endpoints

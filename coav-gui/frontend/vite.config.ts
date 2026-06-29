@@ -4,6 +4,8 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   test: {
     environment: 'node',
+    include: ['src/__tests__/**/*.test.ts'],
+    exclude: ['e2e/**'],
   },
   plugins: [vue()],
   // sockjs-client is a CJS module that references Node.js `global` — polyfill it for the browser

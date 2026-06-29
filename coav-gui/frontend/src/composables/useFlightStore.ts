@@ -11,9 +11,15 @@ const goAuthorized = ref(true)   // Supervisor GO/NOGO toggle
 
 let initialized = false
 
+// Builds an absolute URL when BACKEND_URL is set (production), relative otherwise (Vite dev proxy).
+// Exported so components pass it to their own fetch calls and tests can verify the logic.
+export function buildApiUrl(backendUrl: string, path: string): string {
+  return `${backendUrl}${path}`
+}
+
 // Cloud: window.BACKEND_URL injected by nginx /config.js at container startup
 // Local dev (Vite proxy): undefined → use relative paths
-const backendUrl: string = (window as any).BACKEND_URL || ''
+const backendUrl: string = typeof window !== 'undefined' ? (window as any).BACKEND_URL || '' : ''
 
 const criticalFlights = computed(() =>
   flights.value
@@ -101,5 +107,6 @@ export function useFlightStore() {
     flights, issrZones, advisories, connected, goAuthorized,
     criticalFlights, approachingFlights,
     acceptAdvisory, rejectAdvisory,
+    backendUrl,
   }
 }

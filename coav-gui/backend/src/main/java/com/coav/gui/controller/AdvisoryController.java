@@ -2,6 +2,7 @@ package com.coav.gui.controller;
 
 import com.coav.gui.model.Advisory;
 import com.coav.gui.service.AdvisoryService;
+import com.coav.gui.service.FlightStateStore;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Collection;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/advisory")
@@ -24,6 +26,7 @@ import java.util.Collection;
 public class AdvisoryController {
 
     private final AdvisoryService advisoryService;
+    private final FlightStateStore flightStateStore;
 
     @GetMapping
     public Collection<Advisory> getPending() {
@@ -43,6 +46,21 @@ public class AdvisoryController {
         return advisoryService.reject(body.getAdvisoryId())
                 ? ResponseEntity.ok().build()
                 : ResponseEntity.notFound().build();
+    }
+
+    @GetMapping("/stats")
+    public Map<String, Object> getStats() {
+        AdvisoryService.Stats s = advisoryService.getStats();
+        long inIssr = flightStateStore.getAllFlights().stream()
+                .filter(f -> "CRITICAL".equals(f.getAlert())).count();
+        return Map.of(
+            "totalGenerated",    s.totalGenerated(),
+            "accepted",          s.accepted(),
+            "rejected",          s.rejected(),
+            "pending",           advisoryService.getPendingAdvisories().size(),
+            "flightsInIssr",     inIssr,
+            "avgDecisionSeconds", Math.round(s.avgDecisionSeconds())
+        );
     }
 
     @Data

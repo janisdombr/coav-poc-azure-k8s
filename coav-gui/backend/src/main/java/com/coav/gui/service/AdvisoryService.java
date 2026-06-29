@@ -25,9 +25,10 @@ public class AdvisoryService {
     private final Map<String, Advisory> pending      = new ConcurrentHashMap<>();
     // History: accepted + rejected
     private final List<Advisory>        history      = new ArrayList<>();
-    // Rejection cooldown: flight won't get a new advisory for 5 min after FDO rejects
-    private final Map<String, Instant>  rejectedUntil = new ConcurrentHashMap<>();
-    private static final Duration       REJECT_COOLDOWN = Duration.ofMinutes(5);
+    // Cooldown after any FDO decision (accept OR reject): no new advisory for 5 min.
+    // Prevents re-generating for holding/slow flights whose trajectory doesn't change.
+    private final Map<String, Instant>  cooldownUntil = new ConcurrentHashMap<>();
+    private static final Duration       DECISION_COOLDOWN = Duration.ofMinutes(5);
 
     /**
      * Called by FlightStateStore every time a flight is updated.
@@ -38,11 +39,11 @@ public class AdvisoryService {
         boolean isApproaching = "APPROACHING".equals(flight.getAlert());
 
         if (isApproaching) {
-            // Skip if FDO recently rejected an advisory for this flight
-            Instant cooldown = rejectedUntil.get(flight.getFlightId());
+            // Skip if FDO recently decided on an advisory for this flight (accept or reject)
+            Instant cooldown = cooldownUntil.get(flight.getFlightId());
             if (cooldown != null) {
                 if (Instant.now().isBefore(cooldown)) return;
-                rejectedUntil.remove(flight.getFlightId()); // cooldown expired
+                cooldownUntil.remove(flight.getFlightId()); // cooldown expired
             }
             // Only generate once per approach (don't spam advisories)
             pending.computeIfAbsent(flight.getFlightId(), id -> {
@@ -63,6 +64,24 @@ public class AdvisoryService {
         return pending.values();
     }
 
+    public record Stats(int totalGenerated, int accepted, int rejected, double avgDecisionSeconds) {}
+
+    public Stats getStats() {
+        List<Advisory> snap;
+        synchronized (history) { snap = List.copyOf(history); }
+
+        int acc = (int) snap.stream().filter(a -> "ACCEPTED".equals(a.getStatus())).count();
+        int rej = (int) snap.stream().filter(a -> "REJECTED".equals(a.getStatus())).count();
+
+        double avg = snap.stream()
+            .filter(a -> a.getDecidedAt() != null)
+            .mapToLong(a -> Instant.parse(a.getDecidedAt()).getEpochSecond()
+                         - Instant.parse(a.getGeneratedAt()).getEpochSecond())
+            .average().orElse(0.0);
+
+        return new Stats(pending.size() + snap.size(), acc, rej, avg);
+    }
+
     public boolean accept(String advisoryId) {
         return decide(advisoryId, "ACCEPTED");
     }
@@ -80,9 +99,7 @@ public class AdvisoryService {
                         .build();
                 String flightId = entry.getKey();
                 pending.remove(flightId);
-                if ("REJECTED".equals(status)) {
-                    rejectedUntil.put(flightId, Instant.now().plus(REJECT_COOLDOWN));
-                }
+                cooldownUntil.put(flightId, Instant.now().plus(DECISION_COOLDOWN));
                 synchronized (history) { history.add(decided); }
                 broadcast();
                 return true;
@@ -91,20 +108,25 @@ public class AdvisoryService {
         return false;
     }
 
+    // FL ranges mirroring FlightStateStore.ISSR_ZONES (avoids circular dep)
+    private static final Map<String, int[]> ZONE_FL = Map.of(
+        "ALPHA", new int[]{330, 380},
+        "BRAVO", new int[]{310, 370}
+    );
+
     private Advisory generate(Flight flight) {
-        int currentFl    = flight.getAltitudeFt() / 100;
-        int flUp         = ((currentFl + 20) / 10) * 10;   // round to nearest FL10
-        int flDown       = ((currentFl - 20) / 10) * 10;
+        int currentFl = flight.getAltitudeFt() / 100;
+        int flUp      = ((currentFl + 20) / 10) * 10;
+        int flDown    = ((currentFl - 20) / 10) * 10;
 
-        String zoneLabel = flight.getApproachingZoneId() != null
-                ? "Zone " + flight.getApproachingZoneId()
-                : "ISSR zone";
+        String zoneId  = flight.getApproachingZoneId() != null ? flight.getApproachingZoneId() : "ISSR";
+        int[]  flRange = ZONE_FL.getOrDefault(zoneId, new int[]{currentFl - 20, currentFl + 20});
+        int    minutes = flight.getApproachingMinutes() != null ? flight.getApproachingMinutes() : 0;
 
+        // Format mirrors ARGOS COAV: "KLM892 Contrail ALPHA FL330-380 in 12 min. Advised FL390 or FL320."
         String text = String.format(
-            "%s at FL%d entering %s in %d min. Recommend FL%d (+%dft) or FL%d (-%dft).",
-            flight.getFlightId(), currentFl, zoneLabel, flight.getApproachingMinutes(),
-            flUp, (flUp - currentFl) * 100,
-            flDown, (currentFl - flDown) * 100
+            "%s Contrail %s FL%d-%d in %d min. Advised FL%d or FL%d.",
+            flight.getFlightId(), zoneId, flRange[0], flRange[1], minutes, flUp, flDown
         );
 
         return Advisory.builder()

@@ -1,7 +1,16 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useFlightStore } from '../composables/useFlightStore'
 
-const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory } = useFlightStore()
+const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory, criticalFlights } = useFlightStore()
+
+// Local FDO tracking: which advisories have been manually entered into primary ATC system
+const inputMade = ref<Set<string>>(new Set())
+const toggleInput = (id: string) => {
+  const s = new Set(inputMade.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  inputMade.value = s
+}
 </script>
 
 <template>
@@ -16,8 +25,12 @@ const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory } = useFlightSt
     </div>
 
     <div class="scroll-area">
-      <div v-if="advisories.length === 0" class="empty">
+      <div v-if="advisories.length === 0 && criticalFlights.length === 0" class="empty">
         No pending advisories — sector clear
+      </div>
+      <div v-if="advisories.length === 0 && criticalFlights.length > 0" class="critical-note">
+        {{ criticalFlights.length }} aircraft already inside ISSR zone (CRITICAL).
+        Advisories are generated for flights approaching the zone — use ATCO tab to issue corrections directly.
       </div>
 
       <div
@@ -45,6 +58,17 @@ const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory } = useFlightSt
             <span class="fl-arrow">▼</span> FL{{ adv.recommendedFlDown }}
             <span class="fl-delta">-{{ (adv.currentFl - adv.recommendedFlDown) * 100 }}ft</span>
           </div>
+        </div>
+
+        <div class="input-made-row">
+          <label class="input-made-label">
+            <input
+              type="checkbox"
+              :checked="inputMade.has(adv.id)"
+              @change="toggleInput(adv.id)"
+            />
+            Input made in primary system
+          </label>
         </div>
 
         <div class="adv-actions">
@@ -127,6 +151,16 @@ const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory } = useFlightSt
   color: #8b949e;
   text-align: center;
   padding: 20px 0;
+}
+
+.critical-note {
+  font-size: 11px;
+  color: #8b949e;
+  line-height: 1.6;
+  padding: 12px;
+  background: rgba(248,81,73,0.05);
+  border: 1px solid rgba(248,81,73,0.15);
+  border-radius: 6px;
 }
 
 .advisory-card {
@@ -243,6 +277,28 @@ const { advisories, goAuthorized, acceptAdvisory, rejectAdvisory } = useFlightSt
   transition: all 0.15s;
 }
 .btn-reject:hover { border-color: #f85149; color: #f85149; }
+
+.input-made-row {
+  border-top: 1px solid #21262d;
+  padding-top: 8px;
+}
+
+.input-made-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #8b949e;
+  cursor: pointer;
+  user-select: none;
+}
+
+.input-made-label input[type="checkbox"] {
+  accent-color: #3fb950;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
 
 .adv-time {
   font-size: 10px;

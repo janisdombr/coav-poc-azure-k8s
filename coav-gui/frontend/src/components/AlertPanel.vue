@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useFlightStore } from '../composables/useFlightStore'
 import type { Flight, CorrectionResult } from '../types/flight'
 
-const { criticalFlights, flights } = useFlightStore()
+const { criticalFlights, flights, backendUrl } = useFlightStore()
 
 // Snapshot of the flight when the form was opened — keeps the card visible
 // even if the flight's alert clears to green while the operator is filling the form
@@ -26,7 +26,7 @@ const displayedFlights = computed<Flight[]>(() => {
 async function submitCorrection(flightId: string) {
   sending.value = true
   try {
-    const res = await fetch('/api/correction', {
+    const res = await fetch(`${backendUrl}/api/correction`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

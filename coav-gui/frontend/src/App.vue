@@ -5,12 +5,13 @@ import FlightProfile from './components/FlightProfile.vue'
 import AlertPanel from './components/AlertPanel.vue'
 import SupervisorPanel from './components/SupervisorPanel.vue'
 import FdoPanel from './components/FdoPanel.vue'
+import DashboardPanel from './components/DashboardPanel.vue'
 import { useFlightStore } from './composables/useFlightStore'
 
 const { connected, flights, criticalFlights, advisories } = useFlightStore()
 
 const isSidebarOpen = ref(true)
-const activeTab = ref<'supervisor' | 'fdo' | 'atco'>('atco')
+const activeTab = ref<'supervisor' | 'fdo' | 'atco' | 'dashboard'>('atco')
 const alertCount    = computed(() => criticalFlights.value.length)
 const advisoryCount = computed(() => advisories.value.length)
 
@@ -160,6 +161,10 @@ onMounted(() => {
               ATCO
               <span v-if="alertCount > 0" class="role-count atco-count">{{ alertCount }}</span>
             </button>
+            <button
+              :class="['role-pill', { active: activeTab === 'dashboard' }]"
+              @click="activeTab = 'dashboard'"
+            >Dashboard</button>
           </div>
 
           <!-- Tab panels -->
@@ -178,6 +183,10 @@ onMounted(() => {
             <div class="alerts-section">
               <AlertPanel />
             </div>
+          </div>
+
+          <div class="tab-panel" v-show="activeTab === 'dashboard'">
+            <DashboardPanel />
           </div>
         </div>
       </aside>
