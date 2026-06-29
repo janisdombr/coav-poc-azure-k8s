@@ -11,10 +11,19 @@ import { useFlightStore } from '../composables/useFlightStore'
 
 ChartJS.register(LinearScale, PointElement, LineElement, Title, Tooltip, Legend, annotationPlugin)
 
-const { flights, issrZones, advisories } = useFlightStore()
+const { flights, issrZones, advisories, approachingFlights, selectedChartFlightId } = useFlightStore()
 
-// Show trajectory for the active advisory flight, then APPROACHING, then CRITICAL
+// Priority: explicit user selection → active advisory → first APPROACHING → first CRITICAL
 const selectedFlight = computed(() => {
+  // 1. User clicked a card — honour that choice if flight still exists
+  if (selectedChartFlightId.value) {
+    const pinned = flights.value.find(f => f.flightId === selectedChartFlightId.value)
+    if (pinned) return pinned
+    // Flight expired — clear selection
+    selectedChartFlightId.value = null
+  }
+
+  // 2. Auto-select: first advisory flight, then APPROACHING, then CRITICAL
   const advisoryFlightId = advisories.value[0]?.flightId
   if (advisoryFlightId) {
     const f = flights.value.find(f => f.flightId === advisoryFlightId)
@@ -28,12 +37,16 @@ const selectedFlight = computed(() => {
   )
 })
 
+// All APPROACHING flights for the tab switcher
+const switchableFlights = computed(() =>
+  approachingFlights.value.length > 1 ? approachingFlights.value : []
+)
+
 const currentFl = computed(() => selectedFlight.value
   ? Math.round(selectedFlight.value.altitudeFt / 100)
   : 350
 )
 
-// Flat-earth trajectory: current FL held constant over the projection window
 const trajectoryPoints = computed(() => {
   const fl = currentFl.value
   return [{ x: -5, y: fl }, { x: 0, y: fl }, { x: 25, y: fl }]
@@ -42,7 +55,6 @@ const trajectoryPoints = computed(() => {
 const annotations = computed(() => {
   const result: Record<string, object> = {}
 
-  // "Now" vertical line
   result['now'] = {
     type: 'line',
     xMin: 0, xMax: 0,
@@ -69,7 +81,6 @@ const annotations = computed(() => {
   const zoneMinFl = Math.round(zone.minAlt / 100)
   const zoneMaxFl = Math.round(zone.maxAlt / 100)
 
-  // Orange Contrail Area box (Critical+Treatment — matches COAV advisory chart)
   result['issrCritical'] = {
     type: 'box',
     xMin: entryMin,
@@ -89,7 +100,6 @@ const annotations = computed(() => {
     }
   }
 
-  // Zone entry vertical marker
   result['entry'] = {
     type: 'line',
     xMin: entryMin, xMax: entryMin,
@@ -189,10 +199,22 @@ const chartOptions = computed(() => ({
   <div class="flight-profile">
     <div class="panel-title">
       Trajectory Advisory
-      <span v-if="selectedFlight" class="flight-tag">{{ selectedFlight.flightId }}</span>
-      <span v-if="!selectedFlight" style="font-size:10px; color:#484f58; font-weight:400; text-transform:none; letter-spacing:0">
-        no active flight
-      </span>
+      <div class="title-right">
+        <!-- Tab switcher: only shown when ≥2 APPROACHING flights -->
+        <template v-if="switchableFlights.length">
+          <button
+            v-for="f in switchableFlights"
+            :key="f.flightId"
+            :class="['flight-tab', { active: selectedFlight?.flightId === f.flightId }]"
+            @click="selectedChartFlightId = f.flightId"
+          >
+            {{ f.flightId }}
+          </button>
+        </template>
+        <!-- Single flight tag when no switcher -->
+        <span v-else-if="selectedFlight" class="flight-tag">{{ selectedFlight.flightId }}</span>
+        <span v-else class="no-flight">no active flight</span>
+      </div>
     </div>
     <div class="chart-wrap">
       <Scatter
@@ -214,7 +236,7 @@ const chartOptions = computed(() => ({
 }
 
 .panel-title {
-  padding: 8px 12px 6px;
+  padding: 6px 12px 6px;
   font-size: 11px;
   font-weight: 700;
   color: #8b949e;
@@ -223,7 +245,15 @@ const chartOptions = computed(() => ({
   border-bottom: 1px solid #21262d;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  min-height: 32px;
+}
+
+.title-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .flight-tag {
@@ -237,6 +267,41 @@ const chartOptions = computed(() => ({
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: none;
+}
+
+.flight-tab {
+  background: rgba(255,140,0,0.08);
+  color: #8b949e;
+  border: 1px solid rgba(255,140,0,0.2);
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.flight-tab:hover {
+  background: rgba(255,140,0,0.15);
+  color: #ff8c00;
+  border-color: rgba(255,140,0,0.45);
+}
+
+.flight-tab.active {
+  background: rgba(255,140,0,0.2);
+  color: #ff8c00;
+  border-color: rgba(255,140,0,0.6);
+}
+
+.no-flight {
+  font-size: 10px;
+  color: #484f58;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .chart-wrap {

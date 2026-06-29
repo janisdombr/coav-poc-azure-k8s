@@ -3,11 +3,12 @@ import { Client } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
 import type { Flight, IssrZone, Advisory } from '../types/flight'
 
-const flights      = ref<Flight[]>([])
-const issrZones    = ref<IssrZone[]>([])
-const advisories   = ref<Advisory[]>([])
-const connected    = ref(false)
-const goAuthorized = ref(true)   // Supervisor GO/NOGO toggle
+const flights               = ref<Flight[]>([])
+const issrZones             = ref<IssrZone[]>([])
+const advisories            = ref<Advisory[]>([])
+const connected             = ref(false)
+const goAuthorized          = ref(true)   // Supervisor GO/NOGO toggle
+const selectedChartFlightId = ref<string | null>(null)  // shared between AlertPanel → FlightProfile
 
 let initialized = false
 
@@ -107,6 +108,6 @@ export function useFlightStore() {
     flights, issrZones, advisories, connected, goAuthorized,
     criticalFlights, approachingFlights,
     acceptAdvisory, rejectAdvisory,
-    backendUrl,
+    backendUrl, selectedChartFlightId,
   }
 }

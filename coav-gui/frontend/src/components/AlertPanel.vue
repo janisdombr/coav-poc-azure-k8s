@@ -1,28 +1,63 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useFlightStore } from '../composables/useFlightStore'
 import type { Flight, CorrectionResult } from '../types/flight'
 
-const { criticalFlights, flights, backendUrl } = useFlightStore()
+const { criticalFlights, flights, backendUrl, selectedChartFlightId } = useFlightStore()
 
-// Snapshot of the flight when the form was opened — keeps the card visible
-// even if the flight's alert clears to green while the operator is filling the form
 const correctionFlight = ref<Flight | null>(null)
 const newFL            = ref<number>(370)
 const reason           = ref<string>('')
 const lastResult       = ref<CorrectionResult | null>(null)
 const sending          = ref(false)
 
-// Merge: pinned correction target + current critical list (deduped)
-const displayedFlights = computed<Flight[]>(() => {
-  const list = [...criticalFlights.value]
-  if (!correctionFlight.value) return list
-  const alreadyPresent = list.some(f => f.flightId === correctionFlight.value!.flightId)
-  if (alreadyPresent) return list
-  // Flight left criticalFlights (alert cleared) but form is still open — keep it at the top
-  return [correctionFlight.value, ...list]
+// ── Sticky APPROACHING ────────────────────────────────────────────────────────
+// APPROACHING alert can flicker in/out between 2-second WebSocket updates.
+// Once a flight enters APPROACHING, keep it in the panel for 30 s so the
+// operator has time to read and click without it vanishing.
+const stickyAt     = ref<Record<string, number>>({})   // flightId → timestamp ms
+const stickyTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+watch(flights, (current) => {
+  current.filter(f => f.alert === 'APPROACHING').forEach(f => {
+    const prev = stickyTimers.get(f.flightId)
+    if (prev) clearTimeout(prev)
+    stickyAt.value[f.flightId] = Date.now()
+    stickyTimers.set(f.flightId, setTimeout(() => {
+      const updated = { ...stickyAt.value }
+      delete updated[f.flightId]
+      stickyAt.value = updated
+      stickyTimers.delete(f.flightId)
+    }, 30_000))
+  })
 })
 
+const displayedFlights = computed<Flight[]>(() => {
+  const list = [...criticalFlights.value]
+  const inList = new Set(list.map(f => f.flightId))
+
+  // Add sticky APPROACHING flights that temporarily left criticalFlights
+  Object.keys(stickyAt.value).forEach(id => {
+    if (!inList.has(id)) {
+      const live = flights.value.find(f => f.flightId === id)
+      if (live) { list.push(live); inList.add(id) }
+    }
+  })
+
+  // Keep correction target visible even if alert fully cleared
+  if (correctionFlight.value && !inList.has(correctionFlight.value.flightId)) {
+    list.unshift(correctionFlight.value)
+  }
+
+  return list
+})
+
+// ── Chart selection ───────────────────────────────────────────────────────────
+function selectForChart(flight: Flight) {
+  selectedChartFlightId.value = flight.flightId
+}
+
+// ── Correction form ───────────────────────────────────────────────────────────
 async function submitCorrection(flightId: string) {
   sending.value = true
   try {
@@ -44,10 +79,10 @@ async function submitCorrection(flightId: string) {
 }
 
 function openForm(flight: Flight) {
-  // Take a snapshot so the card survives alert status changes
   correctionFlight.value = flight
   newFL.value = Math.round(flight.altitudeFt / 100)
   lastResult.value = null
+  selectForChart(flight)
 }
 
 function cancelForm() {
@@ -75,11 +110,16 @@ function cancelForm() {
       <div
         v-for="flight in displayedFlights"
         :key="flight.flightId"
-        :class="['alert-card', flight.alert?.toLowerCase() ?? 'cleared']"
+        :class="['alert-card', flight.alert?.toLowerCase() ?? 'cleared',
+                 { 'chart-selected': selectedChartFlightId === flight.flightId }]"
       >
-        <div class="card-header">
+        <!-- Clicking the header selects this flight for the trajectory chart -->
+        <div class="card-header" @click="selectForChart(flight)">
           <span class="flight-id">{{ flight.flightId }}</span>
-          <span :class="['badge', flight.alert?.toLowerCase()]">{{ flight.alert }}</span>
+          <div class="header-right">
+            <span v-if="selectedChartFlightId === flight.flightId" class="chart-pin">▶ chart</span>
+            <span :class="['badge', flight.alert?.toLowerCase()]">{{ flight.alert }}</span>
+          </div>
         </div>
 
         <div class="card-body">
@@ -163,15 +203,38 @@ function cancelForm() {
   transition: border-color 0.2s;
 }
 
-.alert-card.critical { border-color: rgba(255,68,68,0.35); background: rgba(255,68,68,0.04); }
+.alert-card.critical { border-color: rgba(255,68,68,0.35);  background: rgba(255,68,68,0.04); }
 .alert-card.warning  { border-color: rgba(255,170,0,0.35);  background: rgba(255,170,0,0.04); }
+.alert-card.approaching { border-color: rgba(255,140,0,0.35); background: rgba(255,140,0,0.04); }
 .alert-card.cleared  { border-color: rgba(68,220,136,0.25); background: rgba(68,220,136,0.03); }
+
+.alert-card.chart-selected {
+  outline: 1px solid rgba(88,166,255,0.4);
+  outline-offset: -1px;
+}
 
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.card-header:hover .flight-id { color: #58a6ff; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-pin {
+  font-size: 9px;
+  color: #58a6ff;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
 }
 
 .flight-id {
@@ -180,6 +243,7 @@ function cancelForm() {
   color: #e6edf3;
   font-family: 'Courier New', monospace;
   letter-spacing: 0.04em;
+  transition: color 0.15s;
 }
 
 .card-body {
@@ -200,10 +264,7 @@ function cancelForm() {
   font-family: 'Courier New', monospace;
 }
 
-.detail {
-  font-size: 12px;
-  color: #8b949e;
-}
+.detail { font-size: 12px; color: #8b949e; }
 
 .tag {
   font-size: 10px;
@@ -213,10 +274,9 @@ function cancelForm() {
   letter-spacing: 0.04em;
 }
 
-.tag.contrail { background: rgba(255,68,68,0.15); color: #ff8080; }
+.tag.contrail { background: rgba(255,68,68,0.15);  color: #ff8080; }
 .tag.issr     { background: rgba(255,170,0,0.15);  color: #ffc145; }
 
-/* Correction form */
 .correction-form {
   display: flex;
   flex-direction: column;
@@ -228,18 +288,9 @@ function cancelForm() {
   margin-top: 4px;
 }
 
-.form-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.form-row { display: flex; align-items: center; gap: 8px; }
 
-.form-label {
-  font-size: 11px;
-  color: #8b949e;
-  width: 50px;
-  flex-shrink: 0;
-}
+.form-label { font-size: 11px; color: #8b949e; width: 50px; flex-shrink: 0; }
 
 .form-input {
   flex: 1;
@@ -254,15 +305,9 @@ function cancelForm() {
 }
 
 .form-input:focus { border-color: #58a6ff; }
-
 .fl-input { max-width: 80px; }
 
-.form-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 2px;
-}
+.form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
 
 .btn-send {
   padding: 5px 14px;
@@ -312,4 +357,6 @@ function cancelForm() {
   color: #58a6ff;
   background: rgba(31,111,235,0.07);
 }
+
+.empty { font-size: 12px; color: #484f58; text-align: center; padding: 20px 0; }
 </style>
