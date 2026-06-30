@@ -17,11 +17,38 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  # Detect which components changed — independently of CI's changes job
+  # (CI forces all=true on workflow_call; here we need the real diff).
+  changes:
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      backend:  ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      emulator: ${{ steps.filter.outputs.emulator }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'coav-gui/backend/**'
+            frontend:
+              - 'coav-gui/frontend/**'
+            emulator:
+              - 'edge-emulator/**'
+
   deploy:
     name: Build, push, update Container Apps
     runs-on: ubuntu-latest
-    needs: ci
+    needs: [ci, changes]
     environment: production   # requires manual approval if configured in GitHub
+    # Skip entirely if nothing deployable changed
+    if: |
+      needs.changes.outputs.backend  == 'true' ||
+      needs.changes.outputs.frontend == 'true' ||
+      needs.changes.outputs.emulator == 'true'
 
     steps:
       - uses: actions/checkout@v4
@@ -34,31 +61,48 @@ jobs:
       - name: ACR login
         run: az acr login --name acrcoavpoc
 
-      - name: Build and push all images
+      - name: Build and push — emulator
+        if: needs.changes.outputs.emulator == 'true'
         run: |
           docker build -t acrcoavpoc.azurecr.io/coav-emulator:latest ./edge-emulator
           docker push acrcoavpoc.azurecr.io/coav-emulator:latest
 
+      - name: Build and push — backend
+        if: needs.changes.outputs.backend == 'true'
+        run: |
           docker build -t acrcoavpoc.azurecr.io/coav-backend:latest ./coav-gui/backend
           docker push acrcoavpoc.azurecr.io/coav-backend:latest
 
+      - name: Build and push — frontend
+        if: needs.changes.outputs.frontend == 'true'
+        run: |
           docker build -t acrcoavpoc.azurecr.io/coav-frontend:latest ./coav-gui/frontend
           docker push acrcoavpoc.azurecr.io/coav-frontend:latest
 
-      - name: Update Container Apps
+      - name: Update Container Apps — backend
+        if: needs.changes.outputs.backend == 'true'
         run: |
-          DEPLOY_TIME=$(date -u +%Y%m%dT%H%M%SZ)
           az containerapp update \
             --name coav-backend \
             --resource-group rg-coav-poc-prod \
             --image acrcoavpoc.azurecr.io/coav-backend:latest \
-            --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
+            --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)"
 
+      - name: Update Container Apps — frontend
+        if: needs.changes.outputs.frontend == 'true'
+        run: |
           az containerapp update \
             --name coav-frontend \
             --resource-group rg-coav-poc-prod \
             --image acrcoavpoc.azurecr.io/coav-frontend:latest \
-            --set-env-vars DEPLOY_TIME="$DEPLOY_TIME"
+            --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)"
+
+      - name: Update ACI — emulator
+        if: needs.changes.outputs.emulator == 'true'
+        run: |
+          az container restart \
+            --name aci-coav-emulator \
+            --resource-group rg-coav-poc-prod
 
       - name: Print demo URL
         run: echo "https://coav-frontend.victoriouscliff-165b8274.westeurope.azurecontainerapps.io"
