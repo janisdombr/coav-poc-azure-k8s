@@ -255,45 +255,43 @@ Images identified as clearly showing contrails in manual review (17/40):
 Human–GVCCS agreement: **17/17 (100%)** — confirming annotation quality.
 OpenCV baseline on same images: **0/17** — confirming need for deep learning.
 
-### 4. Train on Google Colab (free T4 GPU, ~4–6 hours)
+### 4. Train — Kaggle Notebooks (recommended, free T4 x2, up to 12 h/session)
 
-Upload `edge-pi/colab_train_contrail.ipynb` to [colab.research.google.com](https://colab.research.google.com).
+Upload `edge-pi/kaggle_train_contrail.ipynb` to [kaggle.com](https://kaggle.com) → **Create → New Notebook**.
 
 **Before running:**
-1. Runtime → Change runtime type → **T4 GPU**
-2. Fix the `dice_score` function in cell 8 (handles empty masks correctly):
+1. Right panel → Accelerator → **GPU T4 x2**
+2. Right panel → Settings → **Internet on**
+3. (Optional) Upload checkpoint file as a Kaggle Dataset and **Add Data** to the notebook.
+   The notebook auto-detects it and resumes training from the saved epoch.
+4. **Run All**
 
-```python
-def dice_score(logits, target, threshold=0.5):
-    pred  = (torch.sigmoid(logits) > threshold).float()
-    inter = (pred * target).sum()
-    union = pred.sum() + target.sum()
-    if union < 1:       # both empty = true negative = perfect score
-        return 1.0
-    return (2 * inter / (union + 1e-8)).item()
-```
-
-3. Add emergency save at the end of cell 8 (after the epoch loop):
-
-```python
-torch.save(model.state_dict(), f'{SAVE_DIR}/contrail_unet_last.pt')
-print("Last weights saved:", f'{SAVE_DIR}/contrail_unet_last.pt')
-```
-
-4. Runtime → **Run all**
-5. Approve Google Drive access — weights saved to `My Drive/coav_contrail_model/`
-6. **Keep the browser tab open** — Colab disconnects after ~90 min of inactivity.
-   Prevent laptop sleep (Mac: System Settings → Battery → Prevent automatic sleeping).
+**Lessons learned during the experiment:**
+- Google Colab free tier disconnected after 4 epochs (~2 hours) due to inactivity timeout
+  and exhausted the weekly GPU quota on reconnect. Weights from epoch 4
+  (`data/contrail_unet_best-4.pt`) were saved to Google Drive and reused.
+- Kaggle was chosen as the replacement: 30 GPU-hours/week free, sessions up to 12 hours,
+  two T4 GPUs available (batch size 16 vs 8 → each epoch ~2× faster).
+- Kaggle requires phone verification to unlock GPU (Settings → Phone Verification).
+- Kaggle requires Internet to be enabled in notebook settings for `pip install` and
+  Zenodo download (Settings → Internet → on).
+- The checkpoint glob pattern needed three levels deep:
+  `/kaggle/input/*/*/*/*.pt` in addition to the standard two-level pattern.
 
 **Expected results:**
 
 | Epoch | Train Dice | Val Dice | Note |
 |---|---|---|---|
-| 5 | ~0.77 | ~0.60 | Fast improvement from ImageNet pretraining |
-| 15 | ~0.85 | ~0.72 | Plateau beginning |
+| 4 | 0.77 | 0.54 | Actual result from Colab run before disconnect |
+| 10 | ~0.83 | ~0.68 | Continued on Kaggle from epoch 5 |
+| 20 | ~0.87 | ~0.73 | Plateau |
 | 30 | ~0.88 | ~0.75 | Final |
 
 Val Dice target: **> 0.60** usable for demo · **> 0.75** production-grade PoC.
+
+**Google Colab alternative** (`edge-pi/colab_train_contrail.ipynb`): works the same way
+but disconnects after ~90 min of browser inactivity and shares a weekly GPU quota
+across all your notebooks. Only recommended for short test runs (< 2 hours).
 
 ### 5. Deploy weights to edge device
 
