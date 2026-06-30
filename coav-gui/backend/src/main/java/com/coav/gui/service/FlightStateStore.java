@@ -21,8 +21,9 @@ public class FlightStateStore {
     private final SimpMessagingTemplate messagingTemplate;
     private final AdvisoryService       advisoryService;
 
-    // Single source of truth for ISSR zones — mirrors emulator.py and backend/main.py
-    public static final List<IssrZone> ISSR_ZONES = List.of(
+    // Fallback hardcoded zones — used until IssrZoneService refreshes from Open-Meteo.
+    // Mirrors emulator.py CRITICAL_ZONES and backend/main.py WEATHER_GRID_ISSR.
+    public static final List<IssrZone> FALLBACK_ZONES = List.of(
         IssrZone.builder()
             .id("ALPHA").label("Zone Alpha — Brussels convergence")
             .minLat(50.20).maxLat(51.00).minLon(3.80).maxLon(5.40)
@@ -34,6 +35,15 @@ public class FlightStateStore {
             .minAlt(31000).maxAlt(37000).severity("CRITICAL")
             .build()
     );
+
+    // Replaced at runtime by IssrZoneService every 30 min; starts with hardcoded fallback.
+    private volatile List<IssrZone> issrZones = FALLBACK_ZONES;
+
+    public List<IssrZone> getIssrZones() { return issrZones; }
+
+    public void updateIssrZones(List<IssrZone> zones) {
+        issrZones = List.copyOf(zones);
+    }
 
     // How many 1-minute steps to project forward when checking APPROACHING
     private static final int APPROACH_HORIZON_MINUTES = 20;
@@ -58,7 +68,7 @@ public class FlightStateStore {
     }
 
     public boolean isInsideIssrZone(double lat, double lon, int alt) {
-        for (IssrZone z : ISSR_ZONES) {
+        for (IssrZone z : issrZones) {
             if (lat >= z.getMinLat() && lat <= z.getMaxLat()
                     && lon >= z.getMinLon() && lon <= z.getMaxLon()
                     && alt >= z.getMinAlt() && alt <= z.getMaxAlt()) {
@@ -128,7 +138,7 @@ public class FlightStateStore {
         for (int min = 1; min <= APPROACH_HORIZON_MINUTES; min++) {
             lat += distDegPerMin * Math.cos(headRad);
             lon += distDegPerMin * Math.sin(headRad) / cosLat;
-            for (IssrZone z : ISSR_ZONES) {
+            for (IssrZone z : issrZones) {
                 if (lat >= z.getMinLat() && lat <= z.getMaxLat()
                         && lon >= z.getMinLon() && lon <= z.getMaxLon()
                         && alt >= z.getMinAlt() && alt <= z.getMaxAlt()) {

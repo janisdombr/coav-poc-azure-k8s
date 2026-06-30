@@ -2,10 +2,13 @@
 
 REST + WebSocket backend for the COAV GUI. Two runtime modes:
 
-| Mode | Profile | Data source |
-|---|---|---|
-| **Mock** | `mock` | Built-in flight simulator (no Azure needed) |
-| **Azure** (default) | *(none)* | Azure Event Hub `telemetry-adsb-inbound` |
+| Mode | Profile | Flight source | ISSR zones |
+|---|---|---|---|
+| **Mock** | `mock` | Built-in flight simulator (no Azure needed) | Dynamic — refreshed every 30 min from Open-Meteo |
+| **Azure** (default) | *(none)* | Azure Event Hub `telemetry-adsb-inbound` | Dynamic — refreshed every 30 min from Open-Meteo |
+
+> ISSR zones are always dynamic (real weather data from Open-Meteo, no API key needed).
+> The `mock` profile only controls the **flight source**, not weather.
 
 ## Prerequisites
 
@@ -18,7 +21,7 @@ REST + WebSocket backend for the COAV GUI. Two runtime modes:
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/flights` | Active flights updated in the last 5 min (JSON array, newest first) |
-| GET | `/api/issr-zones` | ISSR zone definitions (2 zones) |
+| GET | `/api/issr-zones` | ISSR zone definitions (2 hardcoded or N dynamic) |
 | POST | `/api/correction` | Submit ATC flight level correction |
 | WS | `/ws` (STOMP) | Live flight updates → `/topic/flights` |
 
@@ -91,16 +94,17 @@ docker run --rm \
   mvn test -q
 ```
 
-Test coverage:
+Test coverage (51 tests):
 
 | Test class | What it covers |
 |---|---|
 | `CoavGuiApplicationTest` | Spring context loads (mock profile) |
-| `FlightStateStoreTest` | ISSR zone constants, boundary detection, WebSocket broadcast |
+| `FlightStateStoreTest` | Fallback zones, `updateIssrZones`, boundary detection, WebSocket broadcast |
 | `FlightSimulatorServiceTest` | Mock simulator tick behaviour |
-| `FlightControllerTest` | REST endpoints via MockMvc |
+| `FlightControllerTest` | REST endpoints (flights, static + dynamic ISSR zones) |
 | `CorrectionControllerTest` | POST validation — valid + 5 OWASP A03 cases |
 | `CorrectionValidationTest` | Bean Validation boundary tests |
+| `IssrZoneServiceTest` | RHi physics (Murphy & Koop 2005) — warm/cold air, empty guard |
 
 ---
 

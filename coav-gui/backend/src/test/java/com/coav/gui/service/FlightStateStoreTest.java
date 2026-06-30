@@ -10,6 +10,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.util.Collection;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,13 +33,13 @@ class FlightStateStoreTest {
     // --- ISSR zone constants (single source of truth) ---
 
     @Test
-    void issrZones_hasTwoZones() {
-        assertThat(FlightStateStore.ISSR_ZONES).hasSize(2);
+    void issrZones_hasTwoFallbackZones() {
+        assertThat(store.getIssrZones()).hasSize(2);
     }
 
     @Test
     void issrZones_alphaMatchesEmulatorPyCriticalZones() {
-        IssrZone alpha = FlightStateStore.ISSR_ZONES.get(0);
+        IssrZone alpha = store.getIssrZones().get(0);
         assertThat(alpha.getId()).isEqualTo("ALPHA");
         assertThat(alpha.getMinLat()).isEqualTo(50.20);
         assertThat(alpha.getMaxLat()).isEqualTo(51.00);
@@ -51,7 +52,7 @@ class FlightStateStoreTest {
 
     @Test
     void issrZones_bravoMatchesEmulatorPyCriticalZones() {
-        IssrZone bravo = FlightStateStore.ISSR_ZONES.get(1);
+        IssrZone bravo = store.getIssrZones().get(1);
         assertThat(bravo.getId()).isEqualTo("BRAVO");
         assertThat(bravo.getMinLat()).isEqualTo(51.30);
         assertThat(bravo.getMaxLat()).isEqualTo(52.50);
@@ -59,6 +60,17 @@ class FlightStateStoreTest {
         assertThat(bravo.getMaxLon()).isEqualTo(8.20);
         assertThat(bravo.getMinAlt()).isEqualTo(31000);
         assertThat(bravo.getMaxAlt()).isEqualTo(37000);
+    }
+
+    @Test
+    void updateIssrZones_replacesActive() {
+        IssrZone dynamic = IssrZone.builder()
+            .id("Dynamic-A").label("Dynamic Zone A (RHi 130%)")
+            .minLat(50.0).maxLat(52.0).minLon(4.0).maxLon(7.0)
+            .minAlt(32_000).maxAlt(36_000).severity("CRITICAL").build();
+        store.updateIssrZones(List.of(dynamic));
+        assertThat(store.getIssrZones()).hasSize(1);
+        assertThat(store.getIssrZones().get(0).getId()).isEqualTo("Dynamic-A");
     }
 
     // --- Zone detection ---

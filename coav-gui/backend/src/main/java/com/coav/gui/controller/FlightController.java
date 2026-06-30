@@ -28,6 +28,6 @@ public class FlightController {
 
     @GetMapping("/issr-zones")
     public ResponseEntity<List<IssrZone>> getIssrZones() {
-        return ResponseEntity.ok(FlightStateStore.ISSR_ZONES);
+        return ResponseEntity.ok(flightStateStore.getIssrZones());
     }
 }

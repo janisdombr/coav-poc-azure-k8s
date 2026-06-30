@@ -1,6 +1,7 @@
 package com.coav.gui.controller;
 
 import com.coav.gui.model.Flight;
+import com.coav.gui.model.IssrZone;
 import com.coav.gui.service.FlightStateStore;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,8 +68,8 @@ class FlightControllerTest {
     }
 
     @Test
-    void getIssrZones_returnsTwoStaticZones() throws Exception {
-        // FlightStateStore.ISSR_ZONES is a static final — available even when bean is mocked
+    void getIssrZones_returnsFallbackZones() throws Exception {
+        when(flightStateStore.getIssrZones()).thenReturn(FlightStateStore.FALLBACK_ZONES);
         mvc.perform(get("/api/issr-zones"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.length()").value(2))
@@ -76,5 +77,19 @@ class FlightControllerTest {
             .andExpect(jsonPath("$[0].minLat").value(50.20))
             .andExpect(jsonPath("$[0].severity").value("CRITICAL"))
             .andExpect(jsonPath("$[1].id").value("BRAVO"));
+    }
+
+    @Test
+    void getIssrZones_returnsDynamicZones() throws Exception {
+        IssrZone dynamic = IssrZone.builder()
+            .id("Dynamic-A").label("Dynamic Zone A (RHi 130%)")
+            .minLat(50.0).maxLat(52.0).minLon(4.0).maxLon(7.0)
+            .minAlt(32_000).maxAlt(36_000).severity("CRITICAL").build();
+        when(flightStateStore.getIssrZones()).thenReturn(List.of(dynamic));
+        mvc.perform(get("/api/issr-zones"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(1))
+            .andExpect(jsonPath("$[0].id").value("Dynamic-A"))
+            .andExpect(jsonPath("$[0].severity").value("CRITICAL"));
     }
 }
