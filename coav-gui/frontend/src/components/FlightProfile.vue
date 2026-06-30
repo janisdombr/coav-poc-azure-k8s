@@ -52,13 +52,16 @@ const trajectoryPoints = computed(() => {
   return [{ x: -5, y: fl }, { x: 0, y: fl }, { x: 25, y: fl }]
 })
 
-// For CRITICAL flights: find which zone they're in by altitude match
+// For CRITICAL flights: find which zone they're in by geographic position + altitude.
+// Altitude-only match is ambiguous because Zone Alpha and Bravo overlap at FL330–370.
 const criticalZone = computed(() => {
   const f = selectedFlight.value
   if (!f || f.alert !== 'CRITICAL') return null
   const fl = Math.round(f.altitudeFt / 100)
   return issrZones.value.find(z =>
-    fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100)
+    fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100) &&
+    f.latitude  >= z.minLat && f.latitude  <= z.maxLat &&
+    f.longitude >= z.minLon && f.longitude <= z.maxLon
   ) ?? null
 })
 
