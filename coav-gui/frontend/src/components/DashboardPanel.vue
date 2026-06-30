@@ -90,29 +90,36 @@ const fmtSeconds = (sec: number) =>
         </div>
         <div class="info-row">
           <span class="info-dot active" />
-          <span>ISSR Zone ALPHA — Brussels convergence (FL330–FL380)</span>
+          <span>ISSR zones: dynamic — Open-Meteo RHi (Murphy &amp; Koop 2005), refreshed every 30 min</span>
         </div>
         <div class="info-row">
           <span class="info-dot active" />
-          <span>ISSR Zone BRAVO — Dutch-German border (FL310–FL370)</span>
+          <span>Coverage: MUAC region 49.5–53.5°N 2–10°E · FL300–FL360 (250–300 hPa)</span>
         </div>
         <div class="info-row">
           <span class="info-dot inactive" />
-          <span>Contrail forecast: ECMWF IFS + Google ML + CoCiP (production)</span>
+          <span>Production forecast: ECMWF IFS + DWD D-KULT + Google ML + CoCiP (+5 h horizon)</span>
         </div>
         <div class="info-row">
           <span class="info-dot inactive" />
-          <span>Radiative forcing forecast: pycontrail/CoCiP (production)</span>
+          <span>Radiative forcing metric: pycontrail/WIMCOT (production)</span>
         </div>
       </div>
 
       <div class="verification-section">
         <div class="verif-title">Forecast Verification</div>
         <div class="verif-body">
-          Real contrails verified post-hoc via Google Contrail Explorer
-          (GOES/Meteosat satellite data, +1h delay) — partner access required.
-          In the PoC, ISSR zones are static; in production they are updated
-          every hour from DWD/D-KULT · Google · Pycontrail · WIMCOT forecasts.
+          Contrail presence verified post-hoc via
+          <a
+            href="https://contrails.googleapis.com/explore"
+            target="_blank"
+            rel="noopener"
+            class="verif-link"
+          >Google Contrail Explorer</a>
+          — GOES/Meteosat satellite imagery, <strong>~1 h delay</strong> (public).
+          Partner real-time access available via Google Research agreement.
+          In production, ISSR zones are updated every hour from
+          DWD/D-KULT · Google ML · Pycontrail · WIMCOT forecasts.
         </div>
       </div>
     </div>
@@ -278,5 +285,14 @@ const fmtSeconds = (sec: number) =>
   font-size: 11px;
   color: #8b949e;
   line-height: 1.6;
+}
+
+.verif-link {
+  color: #58a6ff;
+  text-decoration: none;
+}
+
+.verif-link:hover {
+  text-decoration: underline;
 }
 </style>
