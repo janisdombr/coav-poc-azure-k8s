@@ -8,7 +8,7 @@ EUROCONTROL MUAC · Contrail Avoidance System · PoC vs Production
 
 | Dimension | This PoC | Production (ARGOS COAV) |
 |---|---|---|
-| **ISSR forecast** | Static zones hardcoded in `FlightStateStore.ISSR_ZONES` | ECMWF IFS NWP + DWD D-KULT + Google ML Contrail model (pycontrails/CoCiP) — +5 h forecast |
+| **ISSR forecast** | Open-Meteo free API → RHi (Murphy & Koop 2005) → bounding-box zones, refreshed every 30 min (`IssrZoneService`); fallback hardcoded Alpha/Bravo at startup | ECMWF IFS NWP + DWD D-KULT + Google ML Contrail model (pycontrails/CoCiP) — +5 h forecast |
 | **Prediction horizon** | Current position only | Trajectory predictor: tactical flight plan + correlated radar → +5 h projection |
 | **Trajectory source** | Linear interpolation from emulator | EUROCONTROL FDMP (NM B2B) + Correlated Surveillance Track |
 | **Contrail metric** | Binary `contrail_detected` flag | Radiative forcing (W/m²) per flight segment via CoCiP/WIMCOT |
@@ -80,7 +80,8 @@ At 1 FPS / 50 KB per frame / 40 cameras:
 
 | Class | File | Role |
 |---|---|---|
-| `FlightStateStore` | `service/FlightStateStore.java` | Single source of truth: flights, ISSR zones, alert enrichment, WebSocket push |
+| `FlightStateStore` | `service/FlightStateStore.java` | Single source of truth: flights, live ISSR zones (`volatile`), alert enrichment, WebSocket push |
+| `IssrZoneService` | `service/IssrZoneService.java` | Scheduled every 30 min: Open-Meteo grid → RHi physics → zone clustering → `store.updateIssrZones()` |
 | `AdvisoryService` | `service/AdvisoryService.java` | Advisory lifecycle: generate → pending → FDO decision → history + cooldown |
 | `FlightSimulatorService` | `service/FlightSimulatorService.java` | Mock data: 4 transit + 2 holding + 1 departure, mirrors emulator.py |
 | `EventHubListenerService` | `service/EventHubListenerService.java` | Live mode: reads Event Hub, joins ADSB+AI streams |
