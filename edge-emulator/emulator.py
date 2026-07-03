@@ -410,5 +410,10 @@ def main():
         print("\n[COAV Emulator] Stopped.")
 
 
+# Module-level init so tests can import ROUTE_HEADINGS, HOLDS, DEP_HEADING etc.
+# without calling main() (which requires CONN_STR and a live backend).
+init_simulation(list(FALLBACK_ZONES))
+zones_cache = list(FALLBACK_ZONES)
+
 if __name__ == "__main__":
     main()
