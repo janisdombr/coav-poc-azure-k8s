@@ -53,13 +53,23 @@ const trajectoryPoints = computed(() => {
 })
 
 // For CRITICAL flights: find which zone they're in by geographic position + altitude.
-// Altitude-only match is ambiguous because Zone Alpha and Bravo overlap at FL330–370.
 const criticalZone = computed(() => {
   const f = selectedFlight.value
   if (!f || f.alert !== 'CRITICAL') return null
   const fl = Math.round(f.altitudeFt / 100)
   return issrZones.value.find(z =>
     fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100) &&
+    f.latitude  >= z.minLat && f.latitude  <= z.maxLat &&
+    f.longitude >= z.minLon && f.longitude <= z.maxLon
+  ) ?? null
+})
+
+// For WARNING flights: find zone overlapping the flight's lat/lon (altitude may not match —
+// contrail detectable just above zone ceiling counts as WARNING, not CRITICAL).
+const warningZone = computed(() => {
+  const f = selectedFlight.value
+  if (!f || f.alert !== 'WARNING') return null
+  return issrZones.value.find(z =>
     f.latitude  >= z.minLat && f.latitude  <= z.maxLat &&
     f.longitude >= z.minLon && f.longitude <= z.maxLon
   ) ?? null
@@ -86,6 +96,32 @@ const annotations = computed(() => {
 
   const f = selectedFlight.value
   if (!f) return result
+
+  // WARNING: contrail detected near or above zone — show zone as reference below the flight
+  if (f.alert === 'WARNING' && warningZone.value) {
+    const zone = warningZone.value
+    const zoneMinFl = Math.round(zone.minAlt / 100)
+    const zoneMaxFl = Math.round(zone.maxAlt / 100)
+    result['issrWarning'] = {
+      type: 'box',
+      xMin: -5, xMax: 25,
+      yMin: zoneMinFl,
+      yMax: zoneMaxFl,
+      backgroundColor: 'rgba(255,170,0,0.08)',
+      borderColor: 'rgba(255,170,0,0.35)',
+      borderWidth: 1,
+      borderDash: [4, 3],
+      label: {
+        display: true,
+        content: `ISSR Zone ${zone.id} (contrail risk)`,
+        color: '#ffaa00',
+        font: { size: 9, weight: 'bold' },
+        position: { x: 'center', y: 'start' },
+        yAdjust: 6
+      }
+    }
+    return result
+  }
 
   // CRITICAL: aircraft already inside the zone — show it spanning the full time range
   if (f.alert === 'CRITICAL' && criticalZone.value) {
@@ -174,6 +210,7 @@ const chartData = computed(() => ({
 
 const activeZone = computed(() =>
   criticalZone.value ??
+  warningZone.value ??
   (selectedFlight.value?.approachingZoneId
     ? issrZones.value.find(z => z.id === selectedFlight.value!.approachingZoneId) ?? null
     : null)
@@ -183,9 +220,14 @@ const flMin = computed(() =>
   activeZone.value ? Math.round(activeZone.value.minAlt / 100) - 20 : 290
 )
 
-const flMax = computed(() =>
-  activeZone.value ? Math.round(activeZone.value.maxAlt / 100) + 20 : 420
-)
+const flMax = computed(() => {
+  if (activeZone.value) {
+    const zoneTop = Math.round(activeZone.value.maxAlt / 100) + 20
+    // Ensure the current flight's FL is always within the chart range
+    return Math.max(zoneTop, currentFl.value + 20)
+  }
+  return 420
+})
 
 const chartOptions = computed(() => ({
   responsive: true,

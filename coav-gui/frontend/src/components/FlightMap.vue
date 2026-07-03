@@ -38,8 +38,8 @@ function drawZones(zones: IssrZone[]): void {
     L.rectangle(
       [[zone.minLat, zone.minLon], [zone.maxLat, zone.maxLon]],
       isDemo
-        ? { color: '#888888', weight: 1, dashArray: '6 4', fillOpacity: 0.06 }
-        : { color: '#ff4444', weight: 1, fillOpacity: 0.15 }
+        ? { pane: 'zonesPane', color: '#888888', weight: 1, dashArray: '6 4', fillOpacity: 0.06 }
+        : { pane: 'zonesPane', color: '#ff4444', weight: 1, fillOpacity: 0.15 }
     )
       .bindTooltip(
         isDemo
@@ -129,6 +129,10 @@ onMounted(() => {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19,
   }).addTo(map)
+
+  // Custom pane for ISSR zones — below SVG overlayPane (400) so flight markers stay on top
+  map.createPane('zonesPane')
+  map.getPane('zonesPane')!.style.zIndex = '350'
 
   zoneLayer = L.layerGroup().addTo(map)
 
