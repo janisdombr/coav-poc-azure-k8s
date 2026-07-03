@@ -7,6 +7,8 @@ EUROCONTROL MUAC · Contract ECTL_SRC_260028
 API url: `https://coav-backend.victoriouscliff-165b8274.westeurope.azurecontainerapps.io/api/flights`
 _(URL printed by `terraform output demo_url` after cloud deployment)_
 
+<img src="images/frontend.png" width="1439" />
+
 ---
 
 ## Architecture
@@ -33,6 +35,30 @@ _(URL printed by `terraform output demo_url` after cloud deployment)_
 | `APPROACHING` | Trajectory projection shows entry within 20 min |
 | `WARNING` | Contrail detected, not yet in/approaching ISSR |
 | `null` | Normal |
+
+---
+
+## Edge AI — Contrail Detection Model
+
+The edge device runs a **U-Net + EfficientNet-B2** segmentation model trained on
+[GVCCS](https://zenodo.org/records/15743988) — the only public ground-camera contrail
+dataset, recorded at EUROCONTROL MUAC Brétigny-sur-Orge (CC BY 4.0).
+
+| Metric | Value |
+|---|---|
+| Architecture | U-Net + EfficientNet-B2 (7M params) |
+| Dataset | GVCCS · 24,228 frames · 111,761 polygon annotations |
+| Best val Dice | **0.7932** (epoch 35 of 41) |
+| PoC threshold | 0.75 ✓ |
+| Loss | Dice + Focal Loss (γ=2, α=0.25) |
+| Training | Kaggle T4 + Google Colab · checkpoints on HuggingFace Hub |
+
+<img src="images/training_curves_final.png" width="1042" />
+
+<img src="images/inference_samples.png" width="1030" />
+
+Full training history, model selection rationale, and deployment instructions →
+[edge-pi/README.md](edge-pi/README.md)
 
 ---
 
@@ -218,8 +244,6 @@ npm install   # once
 npm run dev   # → http://localhost:5173 (proxy /api and /ws → :8080)
 ```
 
-<img src="images/frontend.png" width="1428" />
-
 ---
 
 # CLOUD DEPLOYMENT (Azure Container Apps)
@@ -344,9 +368,13 @@ coav-poc-azure-k8s/
 ├── edge-emulator/
 │   ├── emulator.py                  — Stateful 7-aircraft MUAC sim → Event Hub
 │   └── Dockerfile
-├── edge-pi/
+├── edge-pi/                         — [README](edge-pi/README.md)
 │   ├── node/capture.js              — Node.js: USB webcam → Event Hub
-│   └── python/capture.py            — Python: Pi Camera → Event Hub
+│   ├── python/capture.py            — Python: Pi Camera → Event Hub
+│   ├── python/train.py              — Standalone training script (Azure VM / Linux)
+│   ├── kaggle_train_contrail_v2.ipynb — Kaggle training notebook with HF checkpoint saves
+│   ├── colab_train_contrail_v3.ipynb  — Google Colab version with Drive persistence
+│   └── TRAINING_LOG.md              — Full training history (41 epochs, val Dice 0.7932)
 ├── backend/
 │   └── main.py                      — Python K8s backend v1 (initial prototype; superseded by
 │                                      coav-gui/backend once the Java requirement was found in the spec)
