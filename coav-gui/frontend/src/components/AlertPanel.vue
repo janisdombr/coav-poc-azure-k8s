@@ -71,6 +71,7 @@ async function submitCorrection(flightId: string) {
       })
     })
     lastResult.value = await res.json()
+    setTimeout(() => { lastResult.value = null }, 5000)
   } finally {
     sending.value = false
     correctionFlight.value = null
