@@ -11,7 +11,7 @@ const mapEl = ref<HTMLDivElement | null>(null)
 let map: L.Map | null = null
 const markerMap   = new Map<string, L.CircleMarker>()
 const approachMap = new Map<string, L.Polyline>()   // dashed lines to ISSR zones
-let zonesDrawn = false
+let zoneLayer: L.LayerGroup | null = null            // cleared and redrawn on every zone update
 
 function alertColor(alert: Flight['alert']): string {
   if (alert === 'CRITICAL')   return '#ff4444'
@@ -30,16 +30,18 @@ function flightTooltip(f: Flight): string {
 }
 
 function drawZones(zones: IssrZone[]): void {
-  if (zonesDrawn || !zones.length || !map) return
+  if (!map || !zoneLayer) return
+  // Clear previous zone rectangles before redrawing \u2014 handles zone changes at runtime
+  zoneLayer?.clearLayers()
+  if (!zones.length) return
   zones.forEach(zone => {
     L.rectangle(
       [[zone.minLat, zone.minLon], [zone.maxLat, zone.maxLon]],
       { color: '#ff4444', weight: 1, fillOpacity: 0.15 }
     )
       .bindTooltip(`${zone.id}: FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100}`)
-      .addTo(map!)
+      .addTo(zoneLayer!)
   })
-  zonesDrawn = true
 }
 
 function updateMarkers(current: Flight[]): void {
@@ -54,6 +56,8 @@ function updateMarkers(current: Flight[]): void {
   toRemove.forEach(id => {
     markerMap.get(id)?.remove()
     markerMap.delete(id)
+    approachMap.get(id)?.remove()
+    approachMap.delete(id)
   })
 
   current.forEach(flight => {
@@ -118,6 +122,8 @@ onMounted(() => {
     attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
     maxZoom: 19,
   }).addTo(map)
+
+  zoneLayer = L.layerGroup().addTo(map)
 
   // Watchers fire before onMounted if the store already has data — replay missed updates
   drawZones(issrZones.value)

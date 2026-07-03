@@ -100,6 +100,8 @@ function init(): void {
   fetchIssrZones()
   fetchAdvisories()
   connectStomp()
+  // Re-fetch zones every 5 min — backend refreshes from Open-Meteo every 30 min
+  setInterval(fetchIssrZones, 5 * 60 * 1000)
 }
 
 export function useFlightStore() {
