@@ -3,6 +3,8 @@ import datetime
 import os
 import math
 import random
+import json as json_lib
+import urllib.request
 from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 from azure.eventhub import EventHubProducerClient, EventData
@@ -22,112 +24,270 @@ class ADSBTelemetry(BaseModel):
     confidence_score: float | None = Field(None, ge=0.0, le=1.0)
 
 
-# ── ISSR zones — MUAC sector (mirrors FlightStateStore.ISSR_ZONES) ─────────────
-CRITICAL_ZONES = [
-    (50.20, 51.00, 3.80, 5.40, 33000, 38000),  # Zone Alpha — Brussels convergence
-    (51.30, 52.50, 5.80, 8.20, 31000, 37000),  # Zone Bravo — Dutch-German border
+# ── ISSR zone management — single source of truth from backend API ─────────────
+
+BACKEND_URL    = os.getenv("BACKEND_URL", "http://localhost:8080")
+ZONE_REFRESH_S = 30 * 60   # re-fetch every 30 min (matches IssrZoneService)
+TICK_S         = 3          # seconds per simulation tick
+
+# Used only if API is unreachable at startup
+FALLBACK_ZONES: list[dict] = [
+    {"id": "ALPHA", "minLat": 50.20, "maxLat": 51.00,
+     "minLon": 3.80, "maxLon": 5.40, "minAlt": 33000, "maxAlt": 38000},
+    {"id": "BRAVO", "minLat": 51.30, "maxLat": 52.50,
+     "minLon": 5.80, "maxLon": 8.20, "minAlt": 31000, "maxAlt": 37000},
 ]
 
-def is_inside_critical_zone(lat: float, lon: float, alt: int) -> bool:
-    for zone in CRITICAL_ZONES:
-        min_lat, max_lat, min_lon, max_lon, min_alt, max_alt = zone
-        if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon and min_alt <= alt <= max_alt:
+
+def fetch_issr_zones(retries: int = 3, delay: int = 5) -> list[dict]:
+    """Fetch current ISSR zones from backend REST API with retry."""
+    url = f"{BACKEND_URL}/api/issr-zones"
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                data = json_lib.loads(resp.read().decode())
+            if data:
+                print(f"[Emulator] Fetched {len(data)} zone(s): "
+                      f"{[z['id'] for z in data]}")
+                return data
+            print("[Emulator] API returned empty zone list")
+        except Exception as exc:
+            print(f"[Emulator] Zone fetch attempt {attempt + 1}/{retries}: {exc}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+    print("[Emulator] Using fallback zones (Alpha/Bravo)")
+    return list(FALLBACK_ZONES)
+
+
+def is_inside_zone(lat: float, lon: float, alt: int,
+                   zones: list[dict]) -> bool:
+    """Full zone membership: lat/lon AND altitude."""
+    for z in zones:
+        if (z["minLat"] <= lat <= z["maxLat"] and
+                z["minLon"] <= lon <= z["maxLon"] and
+                z["minAlt"] <= alt <= z["maxAlt"]):
             return True
     return False
 
 
-# ── Transit corridors (mirrors FlightSimulatorService.ROUTES) ─────────────────
-# Each entry: (startLat, startLon, endLat, endLon)
-ROUTES = [
-    (50.20, 3.80, 52.80, 9.00),  # SW→NE  A7 / N871  Paris → Hamburg
-    (51.50, 9.20, 50.70, 3.40),  # E→W    T180       Frankfurt → Brussels
-    (49.80, 6.50, 52.90, 3.20),  # SE→NW  B317       Luxembourg → North Sea
-    (49.40, 4.60, 53.30, 6.80),  # S→N    UN852      Reims → Frisian Islands
-]
-DURATIONS    = [950, 780, 870, 820]   # ticks to cross the sector
-COOLDOWN_BASE = 130                    # ticks gap before next same-route flight
-COOLDOWN_VAR  = 60
-ALTITUDES    = [35000, 37000, 33000, 36000]
-SPEEDS       = [475, 465, 480, 460]
+def is_contrail_detectable(lat: float, lon: float, alt: int,
+                           zones: list[dict]) -> bool:
+    """
+    Camera detects a contrail when:
+      - Flight is fully inside an ISSR zone (lat/lon + altitude), OR
+      - Flight is inside zone lat/lon but within 4 000 ft ABOVE the zone ceiling.
+        Reason: the ISSR upper boundary is diffuse; air just above the zone is
+        still cold and humid enough for short-lived contrails.  This produces
+        alert=WARNING on the backend (contrailDetected=True, issrZone=False).
+    """
+    for z in zones:
+        in_latlon = (z["minLat"] <= lat <= z["maxLat"] and
+                     z["minLon"] <= lon <= z["maxLon"])
+        if not in_latlon:
+            continue
+        if z["minAlt"] <= alt <= z["maxAlt"]:
+            return True                           # fully inside zone
+        if z["maxAlt"] < alt <= z["maxAlt"] + 4000:
+            return True                           # near-ISSR ceiling
+    return False
 
-ROUTE_AIRLINES = [
-    ["BAW", "EZY", "VLG", "IBE", "TAP"],
-    ["DLH", "AUA", "SWR", "BER", "WZZ"],
-    ["KLM", "TRA", "DAT", "VLR", "DEN"],
-    ["AFR", "TVF", "HOP", "XLR", "LFR"],
-]
-ROUTE_NUMBERS = [
-    [214, 316, 429, 551, 682],
-    [437, 593, 712, 821, 934],
-    [871, 992, 104, 215, 328],
-    [133, 267, 381, 475, 598],
-]
 
-# ── Holding stacks (fixed callsign, infinite circular orbit) ──────────────────
-# Each entry: (centerLat, centerLon, radiusLat, radiusLon)
-HOLDS = [
-    (50.50, 4.80, 0.12, 0.19),  # Brussels  DENUT hold  FL350
-    (52.30, 4.45, 0.10, 0.16),  # Amsterdam SUGOL hold  FL330
-]
-HOLD_ALTS   = [35000, 33000]
-HOLD_SPEEDS = [265, 265]
-HOLD_IDS    = ["BEL256", "KLM892"]
-HOLD_OMEGA  = 2 * math.pi / 420.0  # one orbit ≈ 420 ticks (21 min at 3s/tick)
-
-# ── Departure (one-shot: Maastricht Aachen Airport → northbound) ──────────────
-DEP_ID       = "TUI6KL"
-DEP_START    = (50.91, 5.77)
-DEP_END      = (52.50, 4.20)
-DEP_DURATION = 600
-
+# ── Geography helper ──────────────────────────────────────────────────────────
 
 def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """True bearing in degrees (0=N, 90=E) from point A to point B."""
+    """True bearing in degrees (0=N 90=E) from A to B."""
     lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
     dlon = lon2 - lon1
     x = math.sin(dlon) * math.cos(lat2)
-    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+    y = (math.cos(lat1) * math.sin(lat2)
+         - math.sin(lat1) * math.cos(lat2) * math.cos(dlon))
     return (math.degrees(math.atan2(x, y)) + 360) % 360
 
-# Pre-compute fixed headings per transit route (mirrors FlightSimulatorService.ROUTE_HEADINGS)
-ROUTE_HEADINGS = [
-    _bearing(ROUTES[i][0], ROUTES[i][1], ROUTES[i][2], ROUTES[i][3])
-    for i in range(len(ROUTES))
-]
-DEP_HEADING = _bearing(DEP_START[0], DEP_START[1], DEP_END[0], DEP_END[1])
+
+# ── Route generator — all alert states guaranteed ─────────────────────────────
+
+def compute_simulation(zones: list[dict]) -> dict:
+    """
+    Derive simulation parameters from zone geometry so that all four alert
+    states are always visible:
+
+      CRITICAL   — holding stacks orbit inside the zone
+      APPROACHING — transit routes 0–2 enter the zone from outside (start
+                    at least 2.2° lat/lon clear of the boundary)
+      WARNING    — route 3 flies above zone ceiling within lat/lon bounds
+                   (contrail detectable via near-ISSR logic, not inside zone)
+      null       — transit routes 0–2 when they have exited the far side
+    """
+    ml = min(z["minLat"] for z in zones);  xl = max(z["maxLat"] for z in zones)
+    mn = min(z["minLon"] for z in zones);  xn = max(z["maxLon"] for z in zones)
+    ma = min(z["minAlt"] for z in zones);  xa = max(z["maxAlt"] for z in zones)
+
+    clat     = (ml + xl) / 2
+    clon     = (mn + xn) / 2
+    mid_alt  = int((ma + xa) / 2)          # e.g. FL340 for FL320–360
+    over_alt = xa + 3000                    # above ceiling → WARNING
+
+    # Approach buffer: 2.2° guarantees > 8 min APPROACHING phase before zone entry
+    BUF = 2.2
+
+    # (startLat, startLon, endLat, endLon) — stagger initial progress so all
+    # four phases (outside → APPROACHING → CRITICAL → exited) are visible from
+    # the first tick
+    routes = [
+        # 0  East → West at zone cruise alt  [APPROACHING then CRITICAL then null]
+        (round(clat + 0.4, 2), round(xn + BUF, 2),
+         round(clat - 0.4, 2), round(mn - 1.5, 2)),
+        # 1  South → North at zone cruise alt [APPROACHING then CRITICAL then null]
+        (round(ml - BUF, 2),   round(clon + 0.2, 2),
+         round(xl + 1.5, 2),   round(clon - 0.2, 2)),
+        # 2  North-East → South-West          [APPROACHING then CRITICAL then null]
+        (round(xl + 1.2, 2),   round(xn + 1.2, 2),
+         round(ml - 1.0, 2),   round(mn - 1.0, 2)),
+        # 3  East → West ABOVE zone ceiling    [WARNING only, never CRITICAL]
+        (round(clat + 1.2, 2), round(xn + 2.5, 2),
+         round(clat - 1.2, 2), round(mn - 1.5, 2)),
+    ]
+
+    altitudes = [mid_alt, mid_alt, mid_alt + 1000, over_alt]
+    speeds    = [460, 450, 475, 465]
+    headings  = [_bearing(*r) for r in routes]
+
+    def route_ticks(i: int) -> int:
+        s_lat, s_lon, e_lat, e_lon = routes[i]
+        dlat = abs(e_lat - s_lat) * 60                                    # nm
+        dlon = abs(e_lon - s_lon) * 60 * math.cos(math.radians((s_lat + e_lat) / 2))
+        dist = math.sqrt(dlat**2 + dlon**2)
+        return max(300, int(dist / speeds[i] * 3600 / TICK_S))
+
+    durations = [route_ticks(i) for i in range(len(routes))]
+
+    airlines = [
+        ["DLH", "BAW", "EZY", "IBE", "TAP"],   # E→W
+        ["AFR", "TVF", "KLM", "DAT", "VLG"],   # S→N
+        ["AUA", "SWR", "BER", "VLR", "DEN"],   # NE→SW
+        ["WZZ", "HOP", "XLR", "TRA", "LFR"],   # Above zone (WARNING)
+    ]
+    numbers = [
+        [437, 214, 316, 551, 682],
+        [133, 267, 871, 104, 429],
+        [593, 712, 821, 215, 328],
+        [934, 381, 475, 992, 598],
+    ]
+
+    # Holding stacks — orbit inside zone → always CRITICAL
+    holds = [
+        (round(clat - 0.4, 2), round(clon - 0.5, 2), 0.12, 0.18),
+        (round(clat + 0.5, 2), round(clon + 0.5, 2), 0.10, 0.15),
+    ]
+    hold_alts = [mid_alt, mid_alt - 1000]
+
+    # Departure: climbs from south of zone into zone → CRITICAL at cruise
+    dep_start = (round(ml - 0.5, 2), round(clon, 2))
+    dep_end   = (round(xl + 0.5, 2), round(clon + 0.3, 2))
+    dep_hdg   = _bearing(dep_start[0], dep_start[1], dep_end[0], dep_end[1])
+
+    return dict(
+        routes=routes, altitudes=altitudes, speeds=speeds,
+        headings=headings, durations=durations,
+        airlines=airlines, numbers=numbers,
+        holds=holds, hold_alts=hold_alts,
+        dep_start=dep_start, dep_end=dep_end, dep_heading=dep_hdg,
+    )
 
 
-# ── Mutable simulator state ────────────────────────────────────────────────────
+# ── Mutable simulation state — initialised after zone fetch ───────────────────
+
+ROUTES:         list[tuple] = []
+ALTITUDES:      list[int]   = []
+SPEEDS:         list[int]   = []
+ROUTE_HEADINGS: list[float] = []
+DURATIONS:      list[int]   = []
+ROUTE_AIRLINES: list[list]  = []
+ROUTE_NUMBERS:  list[list]  = []
+HOLDS:          list[tuple] = []
+HOLD_ALTS:      list[int]   = []
+DEP_START       = (0.0, 0.0)
+DEP_END         = (0.0, 0.0)
+DEP_HEADING     = 0.0
+
+HOLD_IDS    = ["BEL256", "KLM892"]
+HOLD_SPEEDS = [265, 265]
+HOLD_OMEGA  = 2 * math.pi / 420.0   # one full orbit ≈ 420 ticks (21 min)
+DEP_ID       = "TUI6KL"
+DEP_DURATION = 600
+COOLDOWN_BASE = 130
+COOLDOWN_VAR  = 60
+
+route_progress:    list[int]  = []
+route_active:      list[bool] = []
+route_cooldown:    list[int]  = []
+route_airline_idx: list[int]  = []
+route_flight_id:   list[str]  = []
+dep_progress = 0
+dep_done     = False
+tick         = 0
+zones_cache: list[dict] = []
+last_zone_refresh = 0.0
+
 
 def make_callsign(route_idx: int, airline_idx: int) -> str:
     return ROUTE_AIRLINES[route_idx][airline_idx] + str(ROUTE_NUMBERS[route_idx][airline_idx])
 
 
-# Stagger initial progress so aircraft start spread across their routes
-route_progress    = [int(DURATIONS[i] * (i + 1) / (len(ROUTES) + 1)) for i in range(len(ROUTES))]
-route_active      = [True] * len(ROUTES)
-route_cooldown    = [0] * len(ROUTES)
-route_airline_idx = [0] * len(ROUTES)
-route_flight_id   = [make_callsign(i, 0) for i in range(len(ROUTES))]
+def init_simulation(zones: list[dict]) -> None:
+    """Initialise all route/hold/dep state from zone geometry."""
+    global ROUTES, ALTITUDES, SPEEDS, ROUTE_HEADINGS, DURATIONS
+    global ROUTE_AIRLINES, ROUTE_NUMBERS, HOLDS, HOLD_ALTS
+    global DEP_START, DEP_END, DEP_HEADING
+    global route_progress, route_active, route_cooldown
+    global route_airline_idx, route_flight_id
+    global dep_progress, dep_done
 
-dep_progress = 0
-dep_done     = False
-tick         = 0
+    cfg = compute_simulation(zones)
+    ROUTES         = cfg["routes"]
+    ALTITUDES      = cfg["altitudes"]
+    SPEEDS         = cfg["speeds"]
+    ROUTE_HEADINGS = cfg["headings"]
+    DURATIONS      = cfg["durations"]
+    ROUTE_AIRLINES = cfg["airlines"]
+    ROUTE_NUMBERS  = cfg["numbers"]
+    HOLDS          = cfg["holds"]
+    HOLD_ALTS      = cfg["hold_alts"]
+    DEP_START      = cfg["dep_start"]
+    DEP_END        = cfg["dep_end"]
+    DEP_HEADING    = cfg["dep_heading"]
 
+    n = len(ROUTES)
+    # Stagger progress so different alert states are visible from the first tick
+    route_progress    = [int(DURATIONS[i] * (i + 1) / (n + 1)) for i in range(n)]
+    route_active      = [True] * n
+    route_cooldown    = [0] * n
+    route_airline_idx = [0] * n
+    route_flight_id   = [make_callsign(i, 0) for i in range(n)]
+    dep_progress = 0
+    dep_done     = False
+
+    zone_ids = [z["id"] for z in zones]
+    print(f"[Emulator] Zones used: {zone_ids}")
+    for i, r in enumerate(ROUTES):
+        print(f"  Route {i}: ({r[0]},{r[1]}) → ({r[2]},{r[3]})  "
+              f"FL{ALTITUDES[i]//100}  hdg={ROUTE_HEADINGS[i]:.0f}°  "
+              f"dur={DURATIONS[i]} ticks ({DURATIONS[i]*TICK_S//60} min)")
+    for h in range(len(HOLDS)):
+        print(f"  Hold {HOLD_IDS[h]}: center=({HOLDS[h][0]},{HOLDS[h][1]}) "
+              f"FL{HOLD_ALTS[h]//100}")
+    print(f"  Departure {DEP_ID}: {DEP_START} → {DEP_END}  hdg={DEP_HEADING:.0f}°")
+
+
+# ── Tick function ─────────────────────────────────────────────────────────────
 
 def build_payloads() -> list[dict]:
-    """
-    Advance simulation by one tick and return the list of telemetry event dicts.
-    Transit flights exit the sector naturally, then a new aircraft with a different
-    callsign starts from the route origin after a gap.  Holding aircraft keep the
-    same callsign indefinitely.  Mirrors FlightSimulatorService.java tick() logic.
-    """
     global tick, dep_progress, dep_done
     global route_progress, route_active, route_cooldown, route_airline_idx, route_flight_id
 
     tick += 1
     iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    active_aircraft: list[tuple] = []  # (flight_id, lat, lon, alt, speed, heading)
+    active: list[tuple] = []   # (fid, lat, lon, alt, spd, hdg)
 
     # ── 1. Transit flights ─────────────────────────────────────────────────────
     for i in range(len(ROUTES)):
@@ -139,19 +299,17 @@ def build_payloads() -> list[dict]:
                 route_progress[i]    = 0
                 route_active[i]      = True
             continue
-
         route_progress[i] += 1
         if route_progress[i] > DURATIONS[i]:
-            # Exited sector — stop publishing; Java FlightStateStore 5-min TTL removes it
             route_active[i]   = False
             route_cooldown[i] = COOLDOWN_BASE + random.randint(0, COOLDOWN_VAR)
             continue
-
         t   = route_progress[i] / DURATIONS[i]
-        lat = ROUTES[i][0] + t * (ROUTES[i][2] - ROUTES[i][0])
-        lon = ROUTES[i][1] + t * (ROUTES[i][3] - ROUTES[i][1])
+        s_lat, s_lon, e_lat, e_lon = ROUTES[i]
+        lat = s_lat + t * (e_lat - s_lat)
+        lon = s_lon + t * (e_lon - s_lon)
         alt = ALTITUDES[i] + int(math.sin(tick * 0.003 + i) * 200)
-        active_aircraft.append((route_flight_id[i], lat, lon, alt, SPEEDS[i], ROUTE_HEADINGS[i]))
+        active.append((route_flight_id[i], lat, lon, alt, SPEEDS[i], ROUTE_HEADINGS[i]))
 
     # ── 2. Holding stacks (fixed callsign, endless orbit) ─────────────────────
     for h in range(len(HOLDS)):
@@ -159,71 +317,80 @@ def build_payloads() -> list[dict]:
         lat   = HOLDS[h][0] + HOLDS[h][2] * math.sin(angle)
         lon   = HOLDS[h][1] + HOLDS[h][3] * math.cos(angle)
         alt   = HOLD_ALTS[h] + int(math.sin(tick * 0.002 + h) * 100)
-        r_lat = HOLDS[h][2]
-        r_lon = HOLDS[h][3]
-        hdg   = (math.degrees(math.atan2(-r_lon * math.sin(angle), r_lat * math.cos(angle))) + 360) % 360
-        active_aircraft.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], round(hdg, 1)))
+        r_lat, r_lon = HOLDS[h][2], HOLDS[h][3]
+        hdg   = (math.degrees(math.atan2(
+            -r_lon * math.sin(angle), r_lat * math.cos(angle))) + 360) % 360
+        active.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], round(hdg, 1)))
 
-    # ── 3. Departure (one-shot) ────────────────────────────────────────────────
+    # ── 3. Departure (one-shot: climbs from south of zone into zone) ───────────
     if not dep_done:
         dep_progress += 1
         t   = dep_progress / DEP_DURATION
         lat = DEP_START[0] + t * (DEP_END[0] - DEP_START[0])
         lon = DEP_START[1] + t * (DEP_END[1] - DEP_START[1])
-        alt = int(10000 + (t / 0.4) * 25000) if t < 0.4 else 35000 + int(math.sin(tick * 0.003) * 100)
-        spd = int(280 + (t / 0.4) * 195) if t < 0.4 else 475
-        active_aircraft.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475), DEP_HEADING))
+        alt = int(10000 + t / 0.4 * 25000) if t < 0.4 \
+              else 35000 + int(math.sin(tick * 0.003) * 100)
+        spd = int(280 + t / 0.4 * 195) if t < 0.4 else 475
+        active.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475), DEP_HEADING))
         if dep_progress >= DEP_DURATION:
             dep_done = True
 
-    # ── Build event pairs (ADSB + EDGE_VISION_AI) for each aircraft ───────────
+    # ── 4. Build event pairs — use live zones for contrail/ISSR truth ─────────
     events: list[dict] = []
-    for fid, lat, lon, alt, spd, hdg in active_aircraft:
-        in_zone = is_inside_critical_zone(lat, lon, alt)
-        conf    = round(0.91 + 0.05 * math.sin(tick * 0.1), 2) if in_zone else 0.95
-
-        events.append({
-            "message_type": "ADSB_TELEMETRY",
-            "flight_id": fid,
-            "timestamp": iso,
-            "latitude": round(lat, 5),
-            "longitude": round(lon, 5),
-            "altitude_ft": alt,
-            "speed_knots": spd,
-            "heading": round(hdg, 1),
-        })
-        events.append({
-            "message_type": "EDGE_VISION_AI",
-            "camera_id": "STATION-BE-01",
-            "flight_id": fid,
-            "timestamp": iso,
-            "latitude": round(lat, 5),
-            "longitude": round(lon, 5),
-            "altitude_ft": alt,
-            "speed_knots": spd,
-            "contrail_detected": in_zone,
-            "confidence_score": conf,
-        })
-
+    for fid, lat, lon, alt, spd, hdg in active:
+        contrail = is_contrail_detectable(lat, lon, alt, zones_cache)
+        conf     = round(0.88 + 0.08 * math.sin(tick * 0.1), 2) if contrail else 0.12
+        events += [
+            {
+                "message_type": "ADSB_TELEMETRY",
+                "flight_id": fid, "timestamp": iso,
+                "latitude": round(lat, 5), "longitude": round(lon, 5),
+                "altitude_ft": alt, "speed_knots": spd,
+                "heading": round(hdg, 1),
+            },
+            {
+                "message_type": "EDGE_VISION_AI",
+                "camera_id": "STATION-BE-01",
+                "flight_id": fid, "timestamp": iso,
+                "latitude": round(lat, 5), "longitude": round(lon, 5),
+                "altitude_ft": alt, "speed_knots": spd,
+                "contrail_detected": contrail,
+                "confidence_score": conf,
+            },
+        ]
     return events
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 def main():
+    global zones_cache, last_zone_refresh
+
     conn_str = os.getenv("CONN_STR")
     if not conn_str:
         print("Error: CONN_STR environment variable is not set.")
         return
 
-    eventhub_name = "telemetry-adsb-inbound"
-    producer = EventHubProducerClient.from_connection_string(
-        conn_str=conn_str, eventhub_name=eventhub_name
-    )
-    print(f"[COAV Emulator] Sending to Event Hub: {eventhub_name}")
-    print(f"[COAV Emulator] {len(ROUTES)} transit routes + {len(HOLDS)} holding stacks + 1 departure")
+    # Wait for backend to be reachable (ACI startup delay can be 1–3 min)
+    print("[Emulator] Fetching ISSR zones from backend …")
+    zones_cache = fetch_issr_zones(retries=30, delay=10)
+    last_zone_refresh = time.time()
 
+    init_simulation(zones_cache)
+    print(f"[COAV Emulator] Running — "
+          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure")
+
+    producer = EventHubProducerClient.from_connection_string(
+        conn_str=conn_str, eventhub_name="telemetry-adsb-inbound"
+    )
     try:
         with producer:
             while True:
+                # Refresh zones for contrail detection (routes stay fixed for this session)
+                if time.time() - last_zone_refresh > ZONE_REFRESH_S:
+                    zones_cache = fetch_issr_zones()
+                    last_zone_refresh = time.time()
+
                 raw_payloads = build_payloads()
                 try:
                     batch = producer.create_batch()
@@ -238,7 +405,7 @@ def main():
                 except ValidationError as ve:
                     print(f"  [OWASP ALERT] Validation failed: {ve}")
 
-                time.sleep(3)
+                time.sleep(TICK_S)
     except KeyboardInterrupt:
         print("\n[COAV Emulator] Stopped.")
 

@@ -32,30 +32,34 @@ public class AdvisoryService {
 
     /**
      * Called by FlightStateStore every time a flight is updated.
-     * Auto-generates an advisory when a flight transitions to APPROACHING,
-     * clears it when the flight is no longer approaching.
+     *
+     * Advisory is generated when a flight is APPROACHING (trajectory will enter ISSR zone)
+     * OR WARNING (contrail detected outside zone — FDO should review FL assignment).
+     *
+     * Advisory is cleared when:
+     *   - CRITICAL: flight entered the zone (ATCO takes over with direct correction)
+     *   - null:     contrail gone, no longer a risk
      */
     public void onFlightUpdate(Flight flight) {
         boolean isApproaching = "APPROACHING".equals(flight.getAlert());
+        boolean isWarning     = "WARNING".equals(flight.getAlert());
+        boolean isCritical    = "CRITICAL".equals(flight.getAlert());
 
-        if (isApproaching) {
+        if (isApproaching || isWarning) {
             // Skip if FDO recently decided on an advisory for this flight (accept or reject)
             Instant cooldown = cooldownUntil.get(flight.getFlightId());
             if (cooldown != null) {
                 if (Instant.now().isBefore(cooldown)) return;
-                cooldownUntil.remove(flight.getFlightId()); // cooldown expired
+                cooldownUntil.remove(flight.getFlightId());
             }
-            // Only generate once per approach (don't spam advisories).
-            // putIfAbsent returns null when newly inserted — broadcast AFTER insert
-            // so pending already contains the advisory when WebSocket clients receive it.
+            // Generate once; putIfAbsent ignores subsequent ticks for the same flight.
             Advisory prev = pending.putIfAbsent(flight.getFlightId(), generate(flight));
             if (prev == null) {
                 broadcast();
             }
-        } else {
-            // Flight left the approaching state without FDO action — remove silently
-            if (pending.containsKey(flight.getFlightId())) {
-                pending.remove(flight.getFlightId());
+        } else if (isCritical || flight.getAlert() == null) {
+            // Entered zone (ATCO handles it) or contrail cleared — remove advisory
+            if (pending.remove(flight.getFlightId()) != null) {
                 broadcast();
             }
         }
@@ -109,26 +113,25 @@ public class AdvisoryService {
         return false;
     }
 
-    // FL ranges mirroring FlightStateStore.ISSR_ZONES (avoids circular dep)
-    private static final Map<String, int[]> ZONE_FL = Map.of(
-        "ALPHA", new int[]{330, 380},
-        "BRAVO", new int[]{310, 370}
-    );
-
     private Advisory generate(Flight flight) {
         int currentFl = flight.getAltitudeFt() / 100;
         int flUp      = ((currentFl + 20) / 10) * 10;
         int flDown    = ((currentFl - 20) / 10) * 10;
 
-        String zoneId  = flight.getApproachingZoneId() != null ? flight.getApproachingZoneId() : "ISSR";
-        int[]  flRange = ZONE_FL.getOrDefault(zoneId, new int[]{currentFl - 20, currentFl + 20});
-        int    minutes = flight.getApproachingMinutes() != null ? flight.getApproachingMinutes() : 0;
-
-        // Format mirrors ARGOS COAV: "KLM892 Contrail ALPHA FL330-380 in 12 min. Advised FL390 or FL320."
-        String text = String.format(
-            "%s Contrail %s FL%d-%d in %d min. Advised FL%d or FL%d.",
-            flight.getFlightId(), zoneId, flRange[0], flRange[1], minutes, flUp, flDown
-        );
+        String text;
+        if ("APPROACHING".equals(flight.getAlert()) && flight.getApproachingZoneId() != null) {
+            int minutes = flight.getApproachingMinutes() != null ? flight.getApproachingMinutes() : 0;
+            text = String.format(
+                "%s approaching Zone %s in %d min at FL%d. Advised FL%d or FL%d.",
+                flight.getFlightId(), flight.getApproachingZoneId(), minutes, currentFl, flUp, flDown
+            );
+        } else {
+            // WARNING: contrail detected outside ISSR zone
+            text = String.format(
+                "%s contrail detected at FL%d. Recommend FL%d or FL%d to reduce contrail formation.",
+                flight.getFlightId(), currentFl, flUp, flDown
+            );
+        }
 
         return Advisory.builder()
                 .id(UUID.randomUUID().toString())
