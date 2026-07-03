@@ -27,8 +27,13 @@ import static java.util.stream.Collectors.joining;
  * Conversion: RHi = RHw × (e_sat_water(T) / e_sat_ice(T)) — Murphy & Koop 2005.
  * ISSR when RHi > 100% at cruise pressure levels (250 hPa ≈ FL340, 300 hPa ≈ FL300).
  *
+ * Forecast offset: uses +5 h ahead (pre-tactical horizon).  ATC decisions for
+ * cruise-level avoidance need ~4–6 h lead time; checking only current conditions
+ * misses ISSR that flights will encounter later in their cruise phase.
+ * In production this would use ECMWF IFS; Open-Meteo is a free proxy for the PoC.
+ *
  * Falls back to FlightStateStore.FALLBACK_ZONES when API is unreachable or returns
- * no ISSR conditions (common in summer / low-humidity periods).
+ * no ISSR conditions.
  */
 @Slf4j
 @Service
@@ -51,6 +56,8 @@ public class IssrZoneService {
 
     private static final double RHI_THRESHOLD    = 100.0;
     private static final int    MIN_CLUSTER_SIZE = 2;
+    // Pre-tactical planning horizon: ISSR zones 5 h ahead (index into hourly[] array)
+    private static final int    FORECAST_HOUR    = 5;
 
     private final HttpClient http = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -115,8 +122,8 @@ public class IssrZoneService {
 
         JsonNode h = objectMapper.readTree(resp.body()).path("hourly");
         for (PressureLevel level : LEVELS) {
-            double tempC = h.path("temperature_" + level.name()).path(0).asDouble(Double.NaN);
-            double rhw   = h.path("relative_humidity_" + level.name()).path(0).asDouble(Double.NaN);
+            double tempC = h.path("temperature_" + level.name()).path(FORECAST_HOUR).asDouble(Double.NaN);
+            double rhw   = h.path("relative_humidity_" + level.name()).path(FORECAST_HOUR).asDouble(Double.NaN);
             if (Double.isNaN(tempC) || Double.isNaN(rhw)) continue;
             double rhi = rhiFromRhw(rhw, tempC);
             out.add(new GridPoint(lat, lon, level.name(), level.altFt, tempC, rhw, rhi));

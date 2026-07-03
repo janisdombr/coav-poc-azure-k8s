@@ -37,6 +37,7 @@ export interface IssrZone {
   minAlt: number
   maxAlt: number
   severity: string
+  demo: boolean   // true = hardcoded fallback, no real ISSR currently detected
 }
 
 export interface Correction {

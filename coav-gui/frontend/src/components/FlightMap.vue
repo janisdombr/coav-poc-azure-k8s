@@ -31,15 +31,22 @@ function flightTooltip(f: Flight): string {
 
 function drawZones(zones: IssrZone[]): void {
   if (!map || !zoneLayer) return
-  // Clear previous zone rectangles before redrawing \u2014 handles zone changes at runtime
-  zoneLayer?.clearLayers()
+  zoneLayer.clearLayers()
   if (!zones.length) return
   zones.forEach(zone => {
+    const isDemo = zone.demo
     L.rectangle(
       [[zone.minLat, zone.minLon], [zone.maxLat, zone.maxLon]],
-      { color: '#ff4444', weight: 1, fillOpacity: 0.15 }
+      isDemo
+        ? { color: '#888888', weight: 1, dashArray: '6 4', fillOpacity: 0.06 }
+        : { color: '#ff4444', weight: 1, fillOpacity: 0.15 }
     )
-      .bindTooltip(`${zone.id}: FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100}`)
+      .bindTooltip(
+        isDemo
+          ? `${zone.id} (demo \u2014 no ISSR now)<br>FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100}`
+          : `${zone.id}: FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100} \u00b7 +5h forecast`,
+        { direction: 'top' }
+      )
       .addTo(zoneLayer!)
   })
 }

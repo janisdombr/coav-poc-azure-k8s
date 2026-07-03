@@ -25,14 +25,14 @@ public class FlightStateStore {
     // Mirrors emulator.py CRITICAL_ZONES and backend/main.py WEATHER_GRID_ISSR.
     public static final List<IssrZone> FALLBACK_ZONES = List.of(
         IssrZone.builder()
-            .id("ALPHA").label("Zone Alpha — Brussels convergence")
+            .id("ALPHA").label("Zone Alpha — Brussels convergence (demo: no ISSR detected)")
             .minLat(50.20).maxLat(51.00).minLon(3.80).maxLon(5.40)
-            .minAlt(33000).maxAlt(38000).severity("CRITICAL")
+            .minAlt(33000).maxAlt(38000).severity("CRITICAL").demo(true)
             .build(),
         IssrZone.builder()
-            .id("BRAVO").label("Zone Bravo — Dutch-German border")
+            .id("BRAVO").label("Zone Bravo — Dutch-German border (demo: no ISSR detected)")
             .minLat(51.30).maxLat(52.50).minLon(5.80).maxLon(8.20)
-            .minAlt(31000).maxAlt(37000).severity("CRITICAL")
+            .minAlt(31000).maxAlt(37000).severity("CRITICAL").demo(true)
             .build()
     );
 

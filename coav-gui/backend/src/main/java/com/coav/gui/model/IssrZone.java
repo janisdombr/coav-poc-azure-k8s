@@ -15,4 +15,6 @@ public class IssrZone {
     private int minAlt;
     private int maxAlt;
     private String severity;
+    // true = hardcoded fallback shown when Open-Meteo detects no ISSR
+    private boolean demo;
 }
