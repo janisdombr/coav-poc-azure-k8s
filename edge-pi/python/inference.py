@@ -165,8 +165,9 @@ class ContrailDetector:
         # are in sky_region coordinate space (y: 0 .. H//2)
         mask = np.zeros(sky_region.shape[:2], dtype=np.float32)
         if lines is not None:
-            for x1, y1, x2, y2 in lines[:, 0]:
-                cv2.line(mask, (x1, y1), (x2, y2), 1.0, 8)
+            # reshape handles both (N,1,4) [old OpenCV] and (N,4) [new OpenCV/NumPy]
+            for x1, y1, x2, y2 in lines.reshape(-1, 4):
+                cv2.line(mask, (int(x1), int(y1)), (int(x2), int(y2)), 1.0, 8)
 
         pixel_ratio = float(mask.sum()) / mask.size
         confidence  = min(pixel_ratio * 20, 0.85)   # crude scaling — NOT reliable

@@ -82,20 +82,28 @@ jobs:
       - name: Update Container Apps — backend
         if: needs.changes.outputs.backend == 'true'
         run: |
-          az containerapp update \
-            --name coav-backend \
-            --resource-group rg-coav-poc-prod \
-            --image acrcoavpoc.azurecr.io/coav-backend:latest \
-            --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)"
+          for attempt in 1 2 3; do
+            az containerapp update \
+              --name coav-backend \
+              --resource-group rg-coav-poc-prod \
+              --image acrcoavpoc.azurecr.io/coav-backend:latest \
+              --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)" && break
+            echo "Attempt $attempt failed, retrying in 20s…"
+            sleep 20
+          done
 
       - name: Update Container Apps — frontend
         if: needs.changes.outputs.frontend == 'true'
         run: |
-          az containerapp update \
-            --name coav-frontend \
-            --resource-group rg-coav-poc-prod \
-            --image acrcoavpoc.azurecr.io/coav-frontend:latest \
-            --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)"
+          for attempt in 1 2 3; do
+            az containerapp update \
+              --name coav-frontend \
+              --resource-group rg-coav-poc-prod \
+              --image acrcoavpoc.azurecr.io/coav-frontend:latest \
+              --set-env-vars DEPLOY_TIME="$(date -u +%Y%m%dT%H%M%SZ)" && break
+            echo "Attempt $attempt failed, retrying in 20s…"
+            sleep 20
+          done
 
       - name: Update ACI — emulator
         if: needs.changes.outputs.emulator == 'true'

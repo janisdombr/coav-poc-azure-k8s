@@ -36,6 +36,9 @@ _(URL printed by `terraform output demo_url` after cloud deployment)_
 | `WARNING` | Contrail detected, not yet in/approaching ISSR |
 | `null` | Normal |
 
+Full architecture: PoC vs Production comparison, data flow diagram, alert state machine →
+[ARCHITECTURE.md](ARCHITECTURE.md)
+
 ---
 
 ## Edge AI — Contrail Detection Model
@@ -299,6 +302,59 @@ docker push acrcoavpoc.azurecr.io/coav-backend:latest
 az containerapp update --name coav-backend --resource-group rg-coav-poc-prod \
   --image acrcoavpoc.azurecr.io/coav-backend:latest
 ```
+
+## Custom domain (Cloudflare)
+
+To serve the frontend at your own domain (e.g. `coav.dombrovski.lv`):
+
+**Step 1 — Cloudflare: add two DNS records**
+
+| Type | Name | Target | Proxy |
+|---|---|---|---|
+| `CNAME` | `coav` | `coav-frontend.<hash>.westeurope.azurecontainerapps.io` | **DNS only** (grey cloud) |
+| `TXT` | `asuid.coav` | value printed by `hostname add` below | DNS only |
+
+Get the CNAME target: `terraform output demo_url` (strip `https://`).
+
+> Keep Proxy **off** — Cloudflare Proxy drops WebSocket connections after 100 s.
+> If you need it on: Cloudflare → Network → WebSockets → On.
+
+**Step 2 — Azure: get the TXT verification value**
+
+```sh
+az containerapp hostname add \
+  --name coav-frontend \
+  --resource-group rg-coav-poc-prod \
+  --hostname coav.dombrovski.lv
+```
+
+This command fails on purpose — it prints the required TXT record value in the error message:
+`A TXT record pointing from asuid.coav.dombrovski.lv to <HASH> was not found.`
+
+Add that `<HASH>` as the TXT record in Cloudflare (step 1 above), then wait ~1 min.
+
+**Step 3 — re-run `hostname add` (now succeeds)**
+
+```sh
+az containerapp hostname add \
+  --name coav-frontend \
+  --resource-group rg-coav-poc-prod \
+  --hostname coav.dombrovski.lv
+```
+
+**Step 4 — bind and issue Let's Encrypt certificate**
+
+```sh
+az containerapp hostname bind \
+  --name coav-frontend \
+  --resource-group rg-coav-poc-prod \
+  --hostname coav.dombrovski.lv \
+  --environment cae-coav \
+  --validation-method CNAME
+```
+
+Azure issues the certificate automatically (up to 20 min). No frontend code changes needed —
+`BACKEND_URL` is injected at container startup via `/config.js`.
 
 ## Teardown cloud deployment
 
