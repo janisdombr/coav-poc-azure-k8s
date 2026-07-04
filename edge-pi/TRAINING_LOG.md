@@ -8,9 +8,10 @@
 | Version | Encoder | Platform | Best val Dice | Epochs | Status |
 |---|---|---|---|---|---|
 | V1 (B4) | EfficientNet-B4 | Google Colab → Kaggle | 0.4918 (ep 22) | 22/30 | Stopped — overfitting |
-| V2 (B2) | EfficientNet-B2 | Kaggle + Google Colab | **0.7932 (ep 35)** | 41 | ✓ Above PoC threshold |
+| V2 (B2) | EfficientNet-B2 | Kaggle + Google Colab | 0.7932 (ep 35) | 41 | ✓ Above PoC threshold |
+| V2 (B2) continued | EfficientNet-B2 | Google Colab (warm restart) | **0.8085 (ep 59)** | 60 | ✓ Best — warm restart recovery |
 
-Best weights: `data/contrail_unet_best.pt` · val Dice **0.7932** · epoch 35
+Best weights: `data/contrail_unet_best.pt` · val Dice **0.8085** · epoch 59
 
 ![Training curves](../images/training_curves_final.png)
 
@@ -182,18 +183,52 @@ due to the biased val set, not model instability.
 With val Dice plateaued at ~0.793, applied a warm LR restart: fresh CosineAnnealing cycle
 starting at LR = 1e-4 (instead of the near-zero LR the cosine schedule had reached).
 
-| Epoch | Train Dice | Val Dice |
-|---|---|---|
-| 39 | 0.6710 | 0.7714 |
-| 40 | 0.6673 | 0.7744 |
-| 41 | 0.6760 | 0.7721 |
+| Epoch | Train Dice | Val Dice | Train Loss | Val Loss |
+|---|---|---|---|---|
+| 39 | 0.6710 | 0.7714 | 0.3646 | 0.2597 |
+| 40 | 0.6673 | 0.7744 | 0.3686 | 0.2551 |
+| 41 | 0.6760 | 0.7721 | 0.3591 | 0.2601 |
 
 Session hit Colab GPU limit after epoch 41. Val Dice temporarily dropped to 0.77 — the
 expected behaviour when LR is reset high: the model is exploring a wider region of the
-loss landscape before converging again. A full warm restart cycle (20+ epochs) would be
-needed to confirm whether it recovers above 0.7932.
+loss landscape before converging again.
 
-Best val Dice across all runs: **0.7932** at epoch 35.
+---
+
+## Attempt 6 — Google Colab · Warm Restart Recovery (epochs 42–60)
+
+Continued the warm restart cycle. Val Dice steadily recovered and then surpassed the
+previous best of 0.7932, confirming that the warm restart successfully escaped the
+local minimum the model was stuck in at epoch 38.
+
+| Epoch | Train Dice | Val Dice | Train Loss | Val Loss | Note |
+|---|---|---|---|---|---|
+| 42 | 0.6789 | 0.7748 | 0.3561 | 0.2546 | Recovery begins |
+| 43 | 0.6769 | 0.7789 | 0.3581 | 0.2502 | |
+| 44 | 0.6846 | 0.7806 | 0.3496 | 0.2489 | |
+| 45 | 0.6862 | 0.7811 | 0.3479 | 0.2476 | |
+| 46 | 0.6862 | 0.7848 | 0.3477 | 0.2437 | |
+| 47 | 0.6971 | 0.7887 | 0.3360 | 0.2391 | |
+| 48 | 0.6953 | 0.7893 | 0.3377 | 0.2383 | |
+| 49 | 0.7005 | 0.7894 | 0.3321 | 0.2383 | |
+| 50 | 0.7049 | 0.7909 | 0.3272 | 0.2366 | |
+| 51 | 0.7114 | 0.7942 | 0.3201 | 0.2324 | Surpasses previous best |
+| 52 | 0.7144 | 0.7967 | 0.3167 | 0.2295 | |
+| 53 | 0.7154 | 0.7975 | 0.3157 | 0.2288 | |
+| 54 | 0.7199 | 0.8013 | 0.3106 | 0.2245 | |
+| 55 | 0.7232 | 0.8024 | 0.3071 | 0.2236 | |
+| 56 | 0.7260 | 0.8053 | 0.3040 | 0.2207 | |
+| 57 | 0.7287 | 0.8050 | 0.3010 | 0.2205 | |
+| 58 | 0.7270 | 0.8060 | 0.3027 | 0.2194 | |
+| **59** | **0.7323** | **0.8085** | **0.2970** | **0.2166** | **Best** |
+| 60 | 0.7379 | 0.8084 | 0.2911 | 0.2169 | Plateau — stopped |
+
+Val Dice crossed 0.80 at epoch 54 and peaked at **0.8085** (epoch 59).
+Train Dice is 0.7323 vs Val Dice 0.8085 — the gap has nearly closed compared to V1's
+0.36 gap, confirming that the architecture change (B4→B2) and augmentation improvements
+are preventing overfitting.
+
+Best val Dice across all runs: **0.8085** at epoch 59.
 
 ---
 
@@ -277,6 +312,7 @@ See Attempt 4 above. `random.seed(42)` shuffle before train/val split.
 | `kaggle_train_contrail_v2.ipynb` | Main training notebook — Kaggle, HF saves, warm restart config |
 | `colab_train_contrail_v3.ipynb` | Google Colab version — Google Drive persistence |
 | `python/train.py` | Standalone training script for Azure VM or any Linux GPU server |
-| `data/checkpoint_last.pt` | Full checkpoint — epoch 41, history, optimizer state |
-| `data/contrail_unet_best.pt` | Best model weights — epoch 35, val Dice 0.7932 |
-| `data/training_curves_final.png` | Training history chart — all 41 epochs |
+| `data/checkpoint_last.pt` | Full checkpoint — epoch 60, history, optimizer state |
+| `data/contrail_unet_best.pt` | Best model weights — epoch 59, val Dice 0.8085 |
+| `../images/training_curves_final.png` | Training history chart — all 60 epochs |
+| `../images/inference_samples.png` | Control set inference — 8 images, input / GT / prediction |

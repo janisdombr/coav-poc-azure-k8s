@@ -53,7 +53,7 @@ The edge device sends only the **inference result** (200 bytes), not raw frames.
 
 **Architecture:** U-Net + EfficientNet-B2  
 **Training dataset:** GVCCS (Ground Visible Camera Contrail Sequences)  
-**Best val Dice:** 0.7932 (epoch 35 of 41)
+**Best val Dice:** 0.8085 (epoch 59 of 60)
 
 Training history and all technical decisions → [TRAINING_LOG.md](TRAINING_LOG.md)
 
@@ -88,7 +88,7 @@ eliminates domain shift.
 | OpenCV heuristics | ~0% | 0 | No context — fails on low-contrast contrails |
 | FCN (2015) | ~40% | 4 GB | No skip connections → blurry boundaries |
 | SegNet (2015) | ~50% | 4 GB | Less precise boundary recovery than U-Net |
-| **U-Net + EfficientNet-B2** ✓ | **~79%** | **6 GB** | **Chosen** |
+| **U-Net + EfficientNet-B2** ✓ | **~81%** | **6 GB** | **Chosen** |
 | DeepLab v3+ | ~72% | 10 GB | No accuracy gain for thin linear structures |
 | SegFormer-B2 | ~78% | 14 GB | +0% vs U-Net B2, 3× longer training |
 | SAM | ~80% | 16+ GB | Prompt-based — incompatible with 1 FPS pipeline |
