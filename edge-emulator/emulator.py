@@ -447,13 +447,20 @@ def main():
         print("Error: CONN_STR environment variable is not set.")
         return
 
-    # Wait for IssrZoneService to publish dynamic zones (initial delay ≈ 60 s in Java)
+    # Wait up to ~5 min for IssrZoneService to publish dynamic zones (initial delay ≈ 60 s).
+    # If IssrZoneService's first run finds no ISSR conditions, backend stays on Alpha/Bravo
+    # and the emulator falls back to those zones — but will auto-reinitialise when Dynamic
+    # zones arrive in the next 30-min IssrZoneService cycle (see re-init logic below).
     zones_cache = wait_for_dynamic_zones()
     last_zone_refresh = time.time()
 
+    _fallback_ids = {"ALPHA", "BRAVO"}
+    on_fallback = {z["id"] for z in zones_cache}.issubset(_fallback_ids)
+
     init_simulation(zones_cache)
     print(f"[COAV Emulator] Running — "
-          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure + 1 arrival")
+          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure + 1 arrival"
+          f"{' [fallback zones — will upgrade automatically]' if on_fallback else ''}")
 
     producer = EventHubProducerClient.from_connection_string(
         conn_str=conn_str, eventhub_name="telemetry-adsb-inbound"
@@ -461,9 +468,20 @@ def main():
     try:
         with producer:
             while True:
-                # Refresh zones for contrail detection (routes stay fixed for this session)
                 if time.time() - last_zone_refresh > ZONE_REFRESH_S:
-                    zones_cache = fetch_issr_zones()
+                    new_zones = fetch_issr_zones()
+                    new_ids   = {z["id"] for z in new_zones}
+                    if on_fallback and not new_ids.issubset(_fallback_ids):
+                        # Zones upgraded fallback → dynamic: reinitialise routes so
+                        # flight positions, holds, and departure/arrival all match the
+                        # real ISSR area instead of the Alpha/Bravo placeholders.
+                        print("[Emulator] Zones upgraded fallback → dynamic — reinitialising")
+                        zones_cache = new_zones
+                        init_simulation(zones_cache)
+                        on_fallback = False
+                    else:
+                        zones_cache = new_zones
+                        on_fallback = new_ids.issubset(_fallback_ids)
                     last_zone_refresh = time.time()
 
                 raw_payloads = build_payloads()
