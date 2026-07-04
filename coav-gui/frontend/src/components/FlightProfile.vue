@@ -13,6 +13,12 @@ ChartJS.register(LinearScale, PointElement, LineElement, Title, Tooltip, Legend,
 
 const { flights, issrZones, advisories, approachingFlights, selectedChartFlightId } = useFlightStore()
 
+// Forces chart re-mount exactly once when zones arrive (empty → loaded).
+// chartjs-plugin-annotation does not reliably pick up annotations added after
+// the chart instance was already initialised with an empty annotations list.
+// Re-mounting resets Chart.js state so it reads the correct options from scratch.
+const zonesLoaded = computed(() => issrZones.value.length > 0)
+
 // Priority: explicit user selection → active advisory → first APPROACHING → first CRITICAL
 const selectedFlight = computed(() => {
   // 1. User clicked a card — honour that choice if flight still exists
@@ -64,15 +70,26 @@ const criticalZone = computed(() => {
   ) ?? null
 })
 
-// For WARNING flights: find zone overlapping the flight's lat/lon (altitude may not match —
-// contrail detectable just above zone ceiling counts as WARNING, not CRITICAL).
+// For WARNING flights: find the nearest ISSR zone regardless of exact lat/lon boundary.
+// WARNING means contrail detected near a zone — flight may be at zone edge or slightly
+// outside. Use 1° lat/lon tolerance, then prefer the zone whose altitude range
+// contains the flight's FL (a mismatch between emulator zones and backend zones can
+// place a WARNING flight 0.05–0.5° outside the strict boundary).
 const warningZone = computed(() => {
   const f = selectedFlight.value
   if (!f || f.alert !== 'WARNING') return null
-  return issrZones.value.find(z =>
-    f.latitude  >= z.minLat && f.latitude  <= z.maxLat &&
-    f.longitude >= z.minLon && f.longitude <= z.maxLon
-  ) ?? null
+  const BUF = 1.0
+  const fl  = Math.round(f.altitudeFt / 100)
+  const candidates = issrZones.value.filter(z =>
+    f.latitude  >= z.minLat - BUF && f.latitude  <= z.maxLat + BUF &&
+    f.longitude >= z.minLon - BUF && f.longitude <= z.maxLon + BUF
+  )
+  if (!candidates.length) return null
+  // Prefer zone whose altitude range includes the flight's current FL
+  return (
+    candidates.find(z => fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100))
+    ?? candidates[0]
+  )
 })
 
 const annotations = computed(() => {
@@ -302,6 +319,7 @@ const chartOptions = computed(() => ({
     <div class="chart-wrap">
       <Scatter
         v-if="selectedFlight"
+        :key="`${selectedFlight.flightId}-${zonesLoaded}`"
         :data="chartData"
         :options="(chartOptions as any)"
       />
