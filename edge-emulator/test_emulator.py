@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 from emulator import (
     ADSBTelemetry, build_payloads,
-    ROUTE_HEADINGS, DEP_HEADING, HOLDS, HOLD_OMEGA,
+    ROUTE_HEADINGS, DEP_HEADING, ARR_HEADING, HOLDS, HOLD_OMEGA,
 )
 
 
@@ -83,9 +83,14 @@ def test_route_3_heading_is_westward():
 
 
 def test_departure_heading_is_northward():
-    # TUI6KL: departs south of ISSR zone, climbs northward into zone, expect near-north
+    # TUI6KL: departs Maastricht Aachen Airport northward into zone, expect near-north
     hdg = DEP_HEADING
     assert hdg < 30.0 or hdg > 330.0, f"Expected N, got {hdg}"
+
+
+def test_arrival_heading_is_southward():
+    # RYR912: descends from north of zone to Maastricht Aachen Airport, expect S/SE
+    assert 130.0 < ARR_HEADING < 230.0, f"Expected S/SE, got {ARR_HEADING}"
 
 
 def test_holding_tangent_heading_changes_per_tick():

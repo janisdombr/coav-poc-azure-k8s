@@ -30,6 +30,10 @@ BACKEND_URL    = os.getenv("BACKEND_URL", "http://localhost:8080")
 ZONE_REFRESH_S = 30 * 60   # re-fetch every 30 min (matches IssrZoneService)
 TICK_S         = 3          # seconds per simulation tick
 
+# Maastricht Aachen Airport (EHBK) — real location of MUAC contrail cameras
+MAASTRICHT_LAT = 50.911
+MAASTRICHT_LON = 5.770
+
 # Used only if API is unreachable at startup
 FALLBACK_ZONES: list[dict] = [
     {"id": "ALPHA", "minLat": 50.20, "maxLat": 51.00,
@@ -56,6 +60,37 @@ def fetch_issr_zones(retries: int = 3, delay: int = 5) -> list[dict]:
             if attempt < retries - 1:
                 time.sleep(delay)
     print("[Emulator] Using fallback zones (Alpha/Bravo)")
+    return list(FALLBACK_ZONES)
+
+
+def wait_for_dynamic_zones() -> list[dict]:
+    """
+    Poll backend until IssrZoneService has replaced the Alpha/Bravo startup
+    fallback with real Open-Meteo zones (initial delay ≈ 60 s in Java).
+    Also handles ACI cold-start where backend is not yet reachable.
+    Max wait: 15 min (90 × 10 s).  Falls back to FALLBACK_ZONES on timeout.
+    """
+    fallback_ids = {"ALPHA", "BRAVO"}
+    url = f"{BACKEND_URL}/api/issr-zones"
+    print("[Emulator] Waiting for dynamic ISSR zones from IssrZoneService …")
+    for attempt in range(90):
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                data = json_lib.loads(resp.read().decode())
+            if data:
+                zone_ids = {z["id"] for z in data}
+                if not zone_ids.issubset(fallback_ids):
+                    print(f"[Emulator] Dynamic zones ready after {attempt * 10}s: "
+                          f"{sorted(zone_ids)}")
+                    return data
+                if attempt % 6 == 0:
+                    print(f"[Emulator] Still fallback {sorted(zone_ids)} — "
+                          f"IssrZoneService not ready yet, elapsed {attempt * 10}s …")
+        except Exception as exc:
+            if attempt % 6 == 0:
+                print(f"[Emulator] Backend not reachable (attempt {attempt + 1}/90): {exc}")
+        time.sleep(10)
+    print("[Emulator] Zone-wait timeout — using Alpha/Bravo fallback")
     return list(FALLBACK_ZONES)
 
 
@@ -181,10 +216,15 @@ def compute_simulation(zones: list[dict]) -> dict:
     ]
     hold_alts = [mid_alt, mid_alt - 1000]
 
-    # Departure: climbs from south of zone into zone → CRITICAL at cruise
-    dep_start = (round(ml - 0.5, 2), round(clon, 2))
+    # Departure: climbs from Maastricht Aachen Airport (EHBK) northward into zone
+    dep_start = (MAASTRICHT_LAT, MAASTRICHT_LON)
     dep_end   = (round(xl + 0.5, 2), round(clon + 0.3, 2))
     dep_hdg   = _bearing(dep_start[0], dep_start[1], dep_end[0], dep_end[1])
+
+    # Arrival: descends from north of zone to Maastricht Aachen Airport (EHBK)
+    arr_start = (round(xl + 0.5, 2), round(clon - 0.2, 2))
+    arr_end   = (MAASTRICHT_LAT, MAASTRICHT_LON)
+    arr_hdg   = _bearing(arr_start[0], arr_start[1], arr_end[0], arr_end[1])
 
     return dict(
         routes=routes, altitudes=altitudes, speeds=speeds,
@@ -192,6 +232,8 @@ def compute_simulation(zones: list[dict]) -> dict:
         airlines=airlines, numbers=numbers,
         holds=holds, hold_alts=hold_alts,
         dep_start=dep_start, dep_end=dep_end, dep_heading=dep_hdg,
+        arr_start=arr_start, arr_end=arr_end, arr_heading=arr_hdg,
+        mid_alt=mid_alt,
     )
 
 
@@ -209,12 +251,18 @@ HOLD_ALTS:      list[int]   = []
 DEP_START       = (0.0, 0.0)
 DEP_END         = (0.0, 0.0)
 DEP_HEADING     = 0.0
+ARR_START       = (0.0, 0.0)
+ARR_END         = (0.0, 0.0)
+ARR_HEADING     = 0.0
+CRUISE_ALT      = 0
 
 HOLD_IDS    = ["BEL256", "KLM892"]
 HOLD_SPEEDS = [265, 265]
 HOLD_OMEGA  = 2 * math.pi / 420.0   # one full orbit ≈ 420 ticks (21 min)
-DEP_ID       = "TUI6KL"
+DEP_ID       = "TUI6KL"   # TUI fly Belgium — Maastricht departure
+ARR_ID       = "RYR912"   # Ryanair — Maastricht arrival
 DEP_DURATION = 600
+ARR_DURATION = 600
 COOLDOWN_BASE = 130
 COOLDOWN_VAR  = 60
 
@@ -225,6 +273,8 @@ route_airline_idx: list[int]  = []
 route_flight_id:   list[str]  = []
 dep_progress = 0
 dep_done     = False
+arr_progress = 0
+arr_done     = False
 tick         = 0
 zones_cache: list[dict] = []
 last_zone_refresh = 0.0
@@ -235,13 +285,14 @@ def make_callsign(route_idx: int, airline_idx: int) -> str:
 
 
 def init_simulation(zones: list[dict]) -> None:
-    """Initialise all route/hold/dep state from zone geometry."""
+    """Initialise all route/hold/dep/arr state from zone geometry."""
     global ROUTES, ALTITUDES, SPEEDS, ROUTE_HEADINGS, DURATIONS
     global ROUTE_AIRLINES, ROUTE_NUMBERS, HOLDS, HOLD_ALTS
     global DEP_START, DEP_END, DEP_HEADING
+    global ARR_START, ARR_END, ARR_HEADING, CRUISE_ALT
     global route_progress, route_active, route_cooldown
     global route_airline_idx, route_flight_id
-    global dep_progress, dep_done
+    global dep_progress, dep_done, arr_progress, arr_done
 
     cfg = compute_simulation(zones)
     ROUTES         = cfg["routes"]
@@ -256,6 +307,10 @@ def init_simulation(zones: list[dict]) -> None:
     DEP_START      = cfg["dep_start"]
     DEP_END        = cfg["dep_end"]
     DEP_HEADING    = cfg["dep_heading"]
+    ARR_START      = cfg["arr_start"]
+    ARR_END        = cfg["arr_end"]
+    ARR_HEADING    = cfg["arr_heading"]
+    CRUISE_ALT     = cfg["mid_alt"]
 
     n = len(ROUTES)
     # Stagger progress so different alert states are visible from the first tick
@@ -266,6 +321,8 @@ def init_simulation(zones: list[dict]) -> None:
     route_flight_id   = [make_callsign(i, 0) for i in range(n)]
     dep_progress = 0
     dep_done     = False
+    arr_progress = ARR_DURATION // 4   # stagger: arrival starts mid-descent so it's visible immediately
+    arr_done     = False
 
     zone_ids = [z["id"] for z in zones]
     print(f"[Emulator] Zones used: {zone_ids}")
@@ -277,12 +334,13 @@ def init_simulation(zones: list[dict]) -> None:
         print(f"  Hold {HOLD_IDS[h]}: center=({HOLDS[h][0]},{HOLDS[h][1]}) "
               f"FL{HOLD_ALTS[h]//100}")
     print(f"  Departure {DEP_ID}: {DEP_START} → {DEP_END}  hdg={DEP_HEADING:.0f}°")
+    print(f"  Arrival   {ARR_ID}: {ARR_START} → {ARR_END}  hdg={ARR_HEADING:.0f}°")
 
 
 # ── Tick function ─────────────────────────────────────────────────────────────
 
 def build_payloads() -> list[dict]:
-    global tick, dep_progress, dep_done
+    global tick, dep_progress, dep_done, arr_progress, arr_done
     global route_progress, route_active, route_cooldown, route_airline_idx, route_flight_id
 
     tick += 1
@@ -322,18 +380,36 @@ def build_payloads() -> list[dict]:
             -r_lon * math.sin(angle), r_lat * math.cos(angle))) + 360) % 360
         active.append((HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], round(hdg, 1)))
 
-    # ── 3. Departure (one-shot: climbs from south of zone into zone) ───────────
+    # ── 3. Departure — TUI6KL climbs from Maastricht Aachen Airport into zone ───
     if not dep_done:
         dep_progress += 1
         t   = dep_progress / DEP_DURATION
         lat = DEP_START[0] + t * (DEP_END[0] - DEP_START[0])
         lon = DEP_START[1] + t * (DEP_END[1] - DEP_START[1])
         alt = int(10000 + t / 0.4 * 25000) if t < 0.4 \
-              else 35000 + int(math.sin(tick * 0.003) * 100)
+              else CRUISE_ALT + int(math.sin(tick * 0.003) * 100)
         spd = int(280 + t / 0.4 * 195) if t < 0.4 else 475
-        active.append((DEP_ID, lat, lon, min(alt, 35200), min(spd, 475), DEP_HEADING))
+        active.append((DEP_ID, lat, lon, min(alt, CRUISE_ALT + 200), min(spd, 475), DEP_HEADING))
         if dep_progress >= DEP_DURATION:
             dep_done = True
+
+    # ── 4. Arrival — RYR912 descends from north of zone to Maastricht Aachen ───
+    if not arr_done:
+        arr_progress += 1
+        t   = arr_progress / ARR_DURATION
+        lat = ARR_START[0] + t * (ARR_END[0] - ARR_START[0])
+        lon = ARR_START[1] + t * (ARR_END[1] - ARR_START[1])
+        # cruise for first 60 %, then descend to ground
+        if t < 0.6:
+            alt = CRUISE_ALT + int(math.sin(tick * 0.003) * 100)
+            spd = 475
+        else:
+            descent_frac = (t - 0.6) / 0.4   # 0 → 1 during final descent
+            alt = int(CRUISE_ALT * (1.0 - descent_frac))
+            spd = int(475 - descent_frac * 335)   # 475 kt → ~140 kt at landing
+        active.append((ARR_ID, lat, lon, max(alt, 0), max(spd, 140), ARR_HEADING))
+        if arr_progress >= ARR_DURATION:
+            arr_done = True
 
     # ── 4. Build event pairs — use live zones for contrail/ISSR truth ─────────
     events: list[dict] = []
@@ -371,14 +447,13 @@ def main():
         print("Error: CONN_STR environment variable is not set.")
         return
 
-    # Wait for backend to be reachable (ACI startup delay can be 1–3 min)
-    print("[Emulator] Fetching ISSR zones from backend …")
-    zones_cache = fetch_issr_zones(retries=30, delay=10)
+    # Wait for IssrZoneService to publish dynamic zones (initial delay ≈ 60 s in Java)
+    zones_cache = wait_for_dynamic_zones()
     last_zone_refresh = time.time()
 
     init_simulation(zones_cache)
     print(f"[COAV Emulator] Running — "
-          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure")
+          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure + 1 arrival")
 
     producer = EventHubProducerClient.from_connection_string(
         conn_str=conn_str, eventhub_name="telemetry-adsb-inbound"
