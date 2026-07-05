@@ -3,6 +3,7 @@ package com.coav.gui.service;
 import com.azure.messaging.eventhubs.EventHubClientBuilder;
 import com.azure.messaging.eventhubs.EventHubConsumerClient;
 import com.azure.messaging.eventhubs.models.EventPosition;
+import com.coav.gui.model.CameraVerification;
 import com.coav.gui.model.Flight;
 import com.coav.gui.model.RawTelemetry;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,12 +33,8 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
     private String connectionString;
 
     private final FlightStateStore store;
+    private final CameraStore cameraStore;
     private final ObjectMapper objectMapper;
-
-    // Partial state for stream join: ADSB_TELEMETRY + EDGE_VISION_AI keyed by flight_id
-    // Mirrors the join logic in backend/main.py evaluate_stream_join()
-    private final Map<String, RawTelemetry> adsbState = new ConcurrentHashMap<>();
-    private final Map<String, RawTelemetry> aiState   = new ConcurrentHashMap<>();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile Thread consumerThread;
@@ -124,42 +121,61 @@ public class EventHubListenerService implements ApplicationRunner, DisposableBea
         }
     }
 
+    // Two decoupled channels (P1): ADSB_TELEMETRY is flight-keyed and drives alerts
+    // via ISSR geometry only; EDGE_VISION_AI is camera-keyed ground verification.
+    // No stream join — contrail-to-flight attribution is deferred to P2.
     private void processEvent(String json) {
         try {
             RawTelemetry raw = objectMapper.readValue(json, RawTelemetry.class);
 
-            if ("ADSB_TELEMETRY".equals(raw.getMessageType())) {
-                adsbState.put(raw.getFlightId(), raw);
-            } else if ("EDGE_VISION_AI".equals(raw.getMessageType())) {
-                aiState.put(raw.getFlightId(), raw);
+            if ("EDGE_VISION_AI".equals(raw.getMessageType())) {
+                processCameraEvent(raw);
+            } else if ("ADSB_TELEMETRY".equals(raw.getMessageType())) {
+                processAdsbEvent(raw);
             }
-
-            // Stream join: update Flight only when ADSB position data is available
-            RawTelemetry adsb = adsbState.get(raw.getFlightId());
-            if (adsb == null) return;
-
-            RawTelemetry ai = aiState.get(raw.getFlightId());
-            boolean inIssr   = store.isInsideIssrZone(adsb.getLatitude(), adsb.getLongitude(), adsb.getAltitudeFt());
-            boolean contrail = ai != null && Boolean.TRUE.equals(ai.getContrailDetected());
-            String alert     = (contrail && inIssr) ? "CRITICAL" : contrail ? "WARNING" : null;
-
-            log.debug("[HOT PATH] {} | ISSR={} contrail={} alert={}", adsb.getFlightId(), inIssr, contrail, alert);
-
-            store.updateFlight(Flight.builder()
-                .flightId(adsb.getFlightId())
-                .latitude(adsb.getLatitude())
-                .longitude(adsb.getLongitude())
-                .altitudeFt(adsb.getAltitudeFt())
-                .speedKnots(adsb.getSpeedKnots())
-                .heading(adsb.getHeading() != null ? adsb.getHeading() : 0.0)
-                .contrailDetected(contrail)
-                .issrZone(inIssr)
-                .alert(alert)
-                .timestamp(adsb.getTimestamp() != null ? adsb.getTimestamp() : Instant.now().toString())
-                .build());
-
         } catch (Exception e) {
             log.warn("[EVENT HUB] Failed to parse event: {}", e.getMessage());
         }
+    }
+
+    private void processAdsbEvent(RawTelemetry raw) {
+        // OWASP A03: Event Hub payloads are untrusted — skip messages missing key/position
+        if (raw.getFlightId() == null || raw.getLatitude() == null
+                || raw.getLongitude() == null || raw.getAltitudeFt() == null) {
+            log.warn("[EVENT HUB] Skipped ADSB_TELEMETRY with missing flight_id/position");
+            return;
+        }
+
+        boolean inIssr = store.isInsideIssrZone(
+            raw.getLatitude(), raw.getLongitude(), raw.getAltitudeFt());
+        log.debug("[HOT PATH] {} | ISSR={}", raw.getFlightId(), inIssr);
+
+        // Alert is left null here — FlightStateStore.enrichAlert() derives it from
+        // ISSR geometry alone (CRITICAL inside, APPROACHING if entry <20 min).
+        store.updateFlight(Flight.builder()
+            .flightId(raw.getFlightId())
+            .latitude(raw.getLatitude())
+            .longitude(raw.getLongitude())
+            .altitudeFt(raw.getAltitudeFt())
+            .speedKnots(raw.getSpeedKnots() != null ? raw.getSpeedKnots() : 0)
+            .heading(raw.getHeading() != null ? raw.getHeading() : 0.0)
+            .issrZone(inIssr)
+            .timestamp(raw.getTimestamp() != null ? raw.getTimestamp() : Instant.now().toString())
+            .build());
+    }
+
+    private void processCameraEvent(RawTelemetry raw) {
+        // CameraStore validates the payload (OWASP A03) before storing/broadcasting
+        cameraStore.updateVerification(CameraVerification.builder()
+            .cameraId(raw.getCameraId())
+            .timestamp(raw.getTimestamp() != null ? raw.getTimestamp() : Instant.now().toString())
+            .contrailDetected(Boolean.TRUE.equals(raw.getContrailDetected()))
+            .confidence(raw.getConfidence())
+            .contrailPixelRatio(raw.getContrailPixelRatio())
+            .contrailCount(raw.getContrailCount())
+            .newContrailCount(raw.getNewContrailCount())
+            .frameRef(raw.getFrameRef())
+            .maskPngB64(raw.getMaskPngB64())
+            .build());
     }
 }

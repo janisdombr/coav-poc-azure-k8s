@@ -1,3 +1,7 @@
 azure-eventhub==5.11.5
 pydantic==2.6.1
 pytest==8.0.0
+# Camera verification channel (Day 11 / P1) — OpenCV heuristic fallback,
+# mask post-processing (connected components, PNG encode). No torch/onnx needed.
+numpy==1.26.4
+opencv-python-headless==4.10.0.84

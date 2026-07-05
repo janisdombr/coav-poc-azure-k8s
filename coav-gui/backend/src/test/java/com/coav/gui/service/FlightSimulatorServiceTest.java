@@ -79,6 +79,45 @@ class FlightSimulatorServiceTest {
     }
 
     @Test
+    void tick_emitsNoPresetAlert_enrichmentIsStoreResponsibility() {
+        // P1 contract: alerts are derived from ISSR geometry ONLY, inside
+        // FlightStateStore.enrichAlert(). The simulator must emit alert=null —
+        // in particular it must never fabricate WARNING from the contrail flag.
+        ArgumentCaptor<Flight> captor = ArgumentCaptor.forClass(Flight.class);
+        service.tick();
+        verify(store, atLeast(6)).updateFlight(captor.capture());
+        captor.getAllValues().forEach(f -> assertThat(f.getAlert()).isNull());
+    }
+
+    @Test
+    void tick_contrailFlagDoesNotImplyAlert() {
+        // contrailDetected is simulation flavour (random 12% outside zones) and
+        // is decoupled from alerts: even flights with the flag carry alert=null.
+        ArgumentCaptor<Flight> captor = ArgumentCaptor.forClass(Flight.class);
+        for (int i = 0; i < 30; i++) service.tick();   // enough ticks to hit the 12%
+        verify(store, atLeast(6)).updateFlight(captor.capture());
+
+        List<Flight> withContrail = captor.getAllValues().stream()
+            .filter(Flight::isContrailDetected).toList();
+        assertThat(withContrail).isNotEmpty();
+        withContrail.forEach(f -> assertThat(f.getAlert()).isNull());
+    }
+
+    @Test
+    void tick_issrZoneFlagMirrorsStoreGeometry() {
+        // The producer flag issrZone must be exactly store.isInsideIssrZone(...)
+        org.mockito.Mockito.when(store.isInsideIssrZone(
+                org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyInt()))
+            .thenReturn(true);
+        ArgumentCaptor<Flight> captor = ArgumentCaptor.forClass(Flight.class);
+        service.tick();
+        verify(store, atLeast(6)).updateFlight(captor.capture());
+        captor.getAllValues().forEach(f -> assertThat(f.isIssrZone()).isTrue());
+    }
+
+    @Test
     void holdingFlights_keepSameCallsignAcrossTicks() {
         ArgumentCaptor<Flight> captor = ArgumentCaptor.forClass(Flight.class);
         service.tick();

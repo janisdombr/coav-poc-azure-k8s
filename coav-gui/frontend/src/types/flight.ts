@@ -7,7 +7,7 @@ export interface Flight {
   heading: number
   contrailDetected: boolean
   issrZone: boolean
-  alert: 'CRITICAL' | 'WARNING' | 'APPROACHING' | null
+  alert: 'CRITICAL' | 'APPROACHING' | null
   approachingZoneId: string | null
   approachingMinutes: number | null
   timestamp: string
@@ -38,6 +38,25 @@ export interface IssrZone {
   maxAlt: number
   severity: string
   demo: boolean   // true = hardcoded fallback, no real ISSR currently detected
+}
+
+export interface Camera {
+  id: string
+  lat: number
+  lon: number
+  elevationCutoffDeg: number
+}
+
+export interface CameraVerification {
+  cameraId: string
+  timestamp: string
+  confidence: number
+  contrailDetected: boolean
+  contrailPixelRatio: number
+  contrailCount: number
+  newContrailCount: number
+  frameRef: string
+  maskPngB64: string | null
 }
 
 export interface Correction {

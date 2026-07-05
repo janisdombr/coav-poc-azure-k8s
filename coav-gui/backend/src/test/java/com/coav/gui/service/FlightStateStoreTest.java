@@ -141,6 +141,128 @@ class FlightStateStoreTest {
         assertThat(store.getAllFlights().iterator().next().getAltitudeFt()).isEqualTo(35000);
     }
 
+    // --- Alert enrichment (P1: geometry-only — WARNING no longer exists) ---
+    // Contract: inside ISSR zone → CRITICAL; trajectory enters zone in <20 min
+    // → APPROACHING; otherwise alert is null. The camera contrail flag NEVER
+    // influences the flight alert (decoupled verification channel).
+
+    private Flight stored(String flightId) {
+        return store.getAllFlights().stream()
+            .filter(f -> f.getFlightId().equals(flightId))
+            .findFirst().orElseThrow();
+    }
+
+    @Test
+    void enrichAlert_insideZone_setsCritical() {
+        // Zone Alpha center, FL350 — producer flag issrZone mirrors geometry
+        store.updateFlight(Flight.builder().flightId("CRIT1")
+            .latitude(50.60).longitude(4.60).altitudeFt(35000)
+            .speedKnots(470).heading(51.0)
+            .issrZone(true).contrailDetected(false)
+            .timestamp("t").build());
+        Flight f = stored("CRIT1");
+        assertThat(f.getAlert()).isEqualTo("CRITICAL");
+        assertThat(f.getApproachingZoneId()).isNull();
+        assertThat(f.getApproachingMinutes()).isNull();
+    }
+
+    @Test
+    void enrichAlert_insideZone_criticalEvenWithoutContrailFlag() {
+        // False negative from the camera channel must NOT suppress the alert
+        store.updateFlight(Flight.builder().flightId("CRIT2")
+            .latitude(51.90).longitude(7.00).altitudeFt(34000)
+            .speedKnots(460).heading(90.0)
+            .issrZone(true).contrailDetected(false)
+            .timestamp("t").build());
+        assertThat(stored("CRIT2").getAlert()).isEqualTo("CRITICAL");
+    }
+
+    @Test
+    void enrichAlert_contrailFlagAlone_neverCreatesAlert() {
+        // contrail_detected=true, but far from every zone and heading away:
+        // alert stays null — geometry is the only alert source (P1)
+        store.updateFlight(Flight.builder().flightId("CTR1")
+            .latitude(48.00).longitude(2.00).altitudeFt(35000)
+            .speedKnots(470).heading(180.0)
+            .issrZone(false).contrailDetected(true)
+            .timestamp("t").build());
+        assertThat(stored("CTR1").getAlert()).isNull();
+    }
+
+    @Test
+    void enrichAlert_producerPresetAlertIsOverridden() {
+        // Legacy producers could send WARNING — enrichAlert must override it;
+        // WARNING can never survive into the store
+        store.updateFlight(Flight.builder().flightId("LEG1")
+            .latitude(48.00).longitude(2.00).altitudeFt(35000)
+            .speedKnots(470).heading(180.0)
+            .issrZone(false).contrailDetected(true)
+            .alert("WARNING")
+            .timestamp("t").build());
+        assertThat(stored("LEG1").getAlert()).isNull();
+    }
+
+    @Test
+    void enrichAlert_headingTowardZone_setsApproachingWithZoneAndEta() {
+        // 0.40° east of Zone Alpha (maxLon 5.40), heading due west at 480 kt:
+        // lon step = 480/3600/cos(50.6°) ≈ 0.21°/min → enters at minute 2
+        store.updateFlight(Flight.builder().flightId("APP1")
+            .latitude(50.60).longitude(5.80).altitudeFt(35000)
+            .speedKnots(480).heading(270.0)
+            .issrZone(false).contrailDetected(false)
+            .timestamp("t").build());
+        Flight f = stored("APP1");
+        assertThat(f.getAlert()).isEqualTo("APPROACHING");
+        assertThat(f.getApproachingZoneId()).isEqualTo("ALPHA");
+        assertThat(f.getApproachingMinutes()).isBetween(1, 3);
+    }
+
+    @Test
+    void enrichAlert_headingAwayFromZone_noAlert() {
+        // Same position as APP1 but heading due east — moving away
+        store.updateFlight(Flight.builder().flightId("AWY1")
+            .latitude(50.60).longitude(5.80).altitudeFt(35000)
+            .speedKnots(480).heading(90.0)
+            .issrZone(false).contrailDetected(false)
+            .timestamp("t").build());
+        assertThat(stored("AWY1").getAlert()).isNull();
+    }
+
+    @Test
+    void enrichAlert_entryBeyond20MinuteHorizon_noAlert() {
+        // 4.6° east of Zone Alpha at 480 kt ≈ 22 min to entry — beyond horizon
+        store.updateFlight(Flight.builder().flightId("FAR1")
+            .latitude(50.60).longitude(10.00).altitudeFt(35000)
+            .speedKnots(480).heading(270.0)
+            .issrZone(false).contrailDetected(false)
+            .timestamp("t").build());
+        assertThat(stored("FAR1").getAlert()).isNull();
+    }
+
+    @Test
+    void enrichAlert_approachAtWrongAltitude_noAlert() {
+        // Trajectory crosses Zone Alpha laterally but FL400 is above its ceiling
+        store.updateFlight(Flight.builder().flightId("ALT1")
+            .latitude(50.60).longitude(5.80).altitudeFt(40000)
+            .speedKnots(480).heading(270.0)
+            .issrZone(false).contrailDetected(false)
+            .timestamp("t").build());
+        assertThat(stored("ALT1").getAlert()).isNull();
+    }
+
+    @Test
+    void updateFlight_forwardsEnrichedFlightToAdvisoryService() {
+        store.updateFlight(Flight.builder().flightId("APP2")
+            .latitude(50.60).longitude(5.80).altitudeFt(35000)
+            .speedKnots(480).heading(270.0)
+            .issrZone(false).contrailDetected(false)
+            .timestamp("t").build());
+        verify(advisoryService).onFlightUpdate(
+            org.mockito.ArgumentMatchers.argThat(f ->
+                "APPROACHING".equals(f.getAlert())
+                    && "ALPHA".equals(f.getApproachingZoneId())));
+    }
+
     // --- WebSocket broadcast ---
 
     @Test

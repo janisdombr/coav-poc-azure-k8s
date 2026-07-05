@@ -1,0 +1,682 @@
+{
+  "dataset": "GVCCS (Zenodo 15743988, CC BY 4.0, EUROCONTROL MUAC)",
+  "split": "val (held-out \u2014 model never trained on these frames)",
+  "seed": 42,
+  "val_fraction": 0.1,
+  "n_total": 19447,
+  "n_val": 1944,
+  "frames": [
+    {
+      "frame_ref": "gvccs_val_00038",
+      "file": "image_20230927124130.jpg",
+      "image_id": 31,
+      "dataset_index": 31,
+      "time": "2023-09-27T12:41:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00048",
+      "file": "image_20230928073100.jpg",
+      "image_id": 8466,
+      "dataset_index": 8466,
+      "time": "2023-09-28T07:31:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00014",
+      "file": "image_20231001090200.jpg",
+      "image_id": 8658,
+      "dataset_index": 8658,
+      "time": "2023-10-01T09:02:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00034",
+      "file": "image_20231001094200.jpg",
+      "image_id": 8738,
+      "dataset_index": 8738,
+      "time": "2023-10-01T09:42:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00073",
+      "file": "image_20231002053900.jpg",
+      "image_id": 8855,
+      "dataset_index": 8855,
+      "time": "2023-10-02T05:39:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00074",
+      "file": "image_20231002055630.jpg",
+      "image_id": 8890,
+      "dataset_index": 8890,
+      "time": "2023-10-02T05:56:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00025",
+      "file": "image_20231002065100.jpg",
+      "image_id": 8999,
+      "dataset_index": 8999,
+      "time": "2023-10-02T06:51:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00008",
+      "file": "image_20231006055400.jpg",
+      "image_id": 9227,
+      "dataset_index": 9227,
+      "time": "2023-10-06T05:54:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00084",
+      "file": "image_20231006082630.jpg",
+      "image_id": 9532,
+      "dataset_index": 9532,
+      "time": "2023-10-06T08:26:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00047",
+      "file": "image_20231006092700.jpg",
+      "image_id": 9653,
+      "dataset_index": 9653,
+      "time": "2023-10-06T09:27:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00029",
+      "file": "image_20231009083230.jpg",
+      "image_id": 9725,
+      "dataset_index": 9725,
+      "time": "2023-10-09T08:32:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00087",
+      "file": "image_20231012133100.jpg",
+      "image_id": 15113,
+      "dataset_index": 15113,
+      "time": "2023-10-12T13:31:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00044",
+      "file": "image_20231014135900.jpg",
+      "image_id": 15579,
+      "dataset_index": 15579,
+      "time": "2023-10-14T13:59:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00028",
+      "file": "image_20231020120830.jpg",
+      "image_id": 15740,
+      "dataset_index": 15740,
+      "time": "2023-10-20T12:08:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00041",
+      "file": "image_20231021143000.jpg",
+      "image_id": 15933,
+      "dataset_index": 15933,
+      "time": "2023-10-21T14:30:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00066",
+      "file": "image_20231022111200.jpg",
+      "image_id": 3250,
+      "dataset_index": 3250,
+      "time": "2023-10-22T11:12:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00076",
+      "file": "image_20231025161530.jpg",
+      "image_id": 228,
+      "dataset_index": 228,
+      "time": "2023-10-25T16:15:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00086",
+      "file": "image_20231028091400.jpg",
+      "image_id": 16448,
+      "dataset_index": 16448,
+      "time": "2023-10-28T09:14:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00000",
+      "file": "image_20231028093530.jpg",
+      "image_id": 16491,
+      "dataset_index": 16491,
+      "time": "2023-10-28T09:35:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00033",
+      "file": "image_20231031093530.jpg",
+      "image_id": 16897,
+      "dataset_index": 16897,
+      "time": "2023-10-31T09:35:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00021",
+      "file": "image_20231031100330.jpg",
+      "image_id": 16953,
+      "dataset_index": 16953,
+      "time": "2023-10-31T10:03:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00051",
+      "file": "image_20231108082030.jpg",
+      "image_id": 17900,
+      "dataset_index": 17900,
+      "time": "2023-11-08T08:20:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00026",
+      "file": "image_20231108085100.jpg",
+      "image_id": 17961,
+      "dataset_index": 17961,
+      "time": "2023-11-08T08:51:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00090",
+      "file": "image_20231108095030.jpg",
+      "image_id": 18080,
+      "dataset_index": 18080,
+      "time": "2023-11-08T09:50:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00050",
+      "file": "image_20231109114430.jpg",
+      "image_id": 18332,
+      "dataset_index": 18332,
+      "time": "2023-11-09T11:44:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00053",
+      "file": "image_20231110125100.jpg",
+      "image_id": 18706,
+      "dataset_index": 18706,
+      "time": "2023-11-10T12:51:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00082",
+      "file": "image_20231113092230.jpg",
+      "image_id": 18919,
+      "dataset_index": 18919,
+      "time": "2023-11-13T09:22:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00003",
+      "file": "image_20231113132830.jpg",
+      "image_id": 19055,
+      "dataset_index": 19055,
+      "time": "2023-11-13T13:28:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00056",
+      "file": "image_20231114092530.jpg",
+      "image_id": 19272,
+      "dataset_index": 19272,
+      "time": "2023-11-14T09:25:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00011",
+      "file": "image_20231114092700.jpg",
+      "image_id": 19275,
+      "dataset_index": 19275,
+      "time": "2023-11-14T09:27:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00002",
+      "file": "image_20231114095730.jpg",
+      "image_id": 19336,
+      "dataset_index": 19336,
+      "time": "2023-11-14T09:57:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00095",
+      "file": "image_20231117071700.jpg",
+      "image_id": 3362,
+      "dataset_index": 3362,
+      "time": "2023-11-17T07:17:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00045",
+      "file": "image_20231211081830.jpg",
+      "image_id": 10095,
+      "dataset_index": 10095,
+      "time": "2023-12-11T08:18:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00049",
+      "file": "image_20231211092530.jpg",
+      "image_id": 10229,
+      "dataset_index": 10229,
+      "time": "2023-12-11T09:25:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00058",
+      "file": "image_20231211092730.jpg",
+      "image_id": 10233,
+      "dataset_index": 10233,
+      "time": "2023-12-11T09:27:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00088",
+      "file": "image_20231211093900.jpg",
+      "image_id": 10256,
+      "dataset_index": 10256,
+      "time": "2023-12-11T09:39:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00019",
+      "file": "image_20231220095030.jpg",
+      "image_id": 4299,
+      "dataset_index": 4299,
+      "time": "2023-12-20T09:50:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00094",
+      "file": "image_20231224141500.jpg",
+      "image_id": 10528,
+      "dataset_index": 10528,
+      "time": "2023-12-24T14:15:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00010",
+      "file": "image_20231229082230.jpg",
+      "image_id": 248,
+      "dataset_index": 248,
+      "time": "2023-12-29T08:22:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00068",
+      "file": "image_20231229082800.jpg",
+      "image_id": 259,
+      "dataset_index": 259,
+      "time": "2023-12-29T08:28:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00022",
+      "file": "image_20240118085230.jpg",
+      "image_id": 10622,
+      "dataset_index": 10622,
+      "time": "2024-01-18T08:52:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00080",
+      "file": "image_20240118091530.jpg",
+      "image_id": 10668,
+      "dataset_index": 10668,
+      "time": "2024-01-18T09:15:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00006",
+      "file": "image_20240120073230.jpg",
+      "image_id": 4317,
+      "dataset_index": 4317,
+      "time": "2024-01-20T07:32:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00078",
+      "file": "image_20240120082930.jpg",
+      "image_id": 4431,
+      "dataset_index": 4431,
+      "time": "2024-01-20T08:29:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00062",
+      "file": "image_20240120092230.jpg",
+      "image_id": 4537,
+      "dataset_index": 4537,
+      "time": "2024-01-20T09:22:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00020",
+      "file": "image_20240122091130.jpg",
+      "image_id": 496,
+      "dataset_index": 496,
+      "time": "2024-01-22T09:11:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00046",
+      "file": "image_20240122091800.jpg",
+      "image_id": 509,
+      "dataset_index": 509,
+      "time": "2024-01-22T09:18:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00013",
+      "file": "image_20240127073600.jpg",
+      "image_id": 4564,
+      "dataset_index": 4564,
+      "time": "2024-01-27T07:36:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00031",
+      "file": "image_20240127085330.jpg",
+      "image_id": 4719,
+      "dataset_index": 4719,
+      "time": "2024-01-27T08:53:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00035",
+      "file": "image_20240127090130.jpg",
+      "image_id": 4735,
+      "dataset_index": 4735,
+      "time": "2024-01-27T09:01:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00039",
+      "file": "image_20240128080400.jpg",
+      "image_id": 4878,
+      "dataset_index": 4878,
+      "time": "2024-01-28T08:04:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00030",
+      "file": "image_20240129073900.jpg",
+      "image_id": 5032,
+      "dataset_index": 5032,
+      "time": "2024-01-29T07:39:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00061",
+      "file": "image_20240131163200.jpg",
+      "image_id": 10919,
+      "dataset_index": 10919,
+      "time": "2024-01-31T16:32:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00064",
+      "file": "image_20240209090100.jpg",
+      "image_id": 11010,
+      "dataset_index": 11010,
+      "time": "2024-02-09T09:01:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00017",
+      "file": "image_20240228070200.jpg",
+      "image_id": 11126,
+      "dataset_index": 11126,
+      "time": "2024-02-28T07:02:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00059",
+      "file": "image_20240304063230.jpg",
+      "image_id": 5516,
+      "dataset_index": 5516,
+      "time": "2024-03-04T06:32:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00052",
+      "file": "image_20240304063400.jpg",
+      "image_id": 5519,
+      "dataset_index": 5519,
+      "time": "2024-03-04T06:34:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00040",
+      "file": "image_20240308063000.jpg",
+      "image_id": 5776,
+      "dataset_index": 5776,
+      "time": "2024-03-08T06:30:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00063",
+      "file": "image_20240308072230.jpg",
+      "image_id": 5881,
+      "dataset_index": 5881,
+      "time": "2024-03-08T07:22:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00072",
+      "file": "image_20240308081030.jpg",
+      "image_id": 5977,
+      "dataset_index": 5977,
+      "time": "2024-03-08T08:10:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00032",
+      "file": "image_20240313095400.jpg",
+      "image_id": 1090,
+      "dataset_index": 1090,
+      "time": "2024-03-13T09:54:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00085",
+      "file": "image_20240314064400.jpg",
+      "image_id": 6080,
+      "dataset_index": 6080,
+      "time": "2024-03-14T06:44:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00092",
+      "file": "image_20240314070500.jpg",
+      "image_id": 6122,
+      "dataset_index": 6122,
+      "time": "2024-03-14T07:05:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00015",
+      "file": "image_20240314073630.jpg",
+      "image_id": 6185,
+      "dataset_index": 6185,
+      "time": "2024-03-14T07:36:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00054",
+      "file": "image_20240315145100.jpg",
+      "image_id": 1246,
+      "dataset_index": 1246,
+      "time": "2024-03-15T14:51:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00009",
+      "file": "image_20240316151000.jpg",
+      "image_id": 6396,
+      "dataset_index": 6396,
+      "time": "2024-03-16T15:10:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00012",
+      "file": "image_20240316153830.jpg",
+      "image_id": 6453,
+      "dataset_index": 6453,
+      "time": "2024-03-16T15:38:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00043",
+      "file": "image_20240318170200.jpg",
+      "image_id": 6639,
+      "dataset_index": 6639,
+      "time": "2024-03-18T17:02:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00071",
+      "file": "image_20240319071500.jpg",
+      "image_id": 6736,
+      "dataset_index": 6736,
+      "time": "2024-03-19T07:15:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00070",
+      "file": "image_20240319072030.jpg",
+      "image_id": 6747,
+      "dataset_index": 6747,
+      "time": "2024-03-19T07:20:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00001",
+      "file": "image_20240319083830.jpg",
+      "image_id": 6903,
+      "dataset_index": 6903,
+      "time": "2024-03-19T08:38:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00018",
+      "file": "image_20240320062000.jpg",
+      "image_id": 6992,
+      "dataset_index": 6992,
+      "time": "2024-03-20T06:20:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00036",
+      "file": "image_20240320071530.jpg",
+      "image_id": 7103,
+      "dataset_index": 7103,
+      "time": "2024-03-20T07:15:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00027",
+      "file": "image_20240321075000.jpg",
+      "image_id": 7376,
+      "dataset_index": 7376,
+      "time": "2024-03-21T07:50:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00077",
+      "file": "image_20240322060400.jpg",
+      "image_id": 7458,
+      "dataset_index": 7458,
+      "time": "2024-03-22T06:04:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00079",
+      "file": "image_20240322062200.jpg",
+      "image_id": 7494,
+      "dataset_index": 7494,
+      "time": "2024-03-22T06:22:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00091",
+      "file": "image_20240408054530.jpg",
+      "image_id": 1613,
+      "dataset_index": 1613,
+      "time": "2024-04-08T05:45:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00007",
+      "file": "image_20240413050830.jpg",
+      "image_id": 11750,
+      "dataset_index": 11750,
+      "time": "2024-04-13T05:08:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00005",
+      "file": "image_20240414052330.jpg",
+      "image_id": 12102,
+      "dataset_index": 12102,
+      "time": "2024-04-14T05:23:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00024",
+      "file": "image_20240421044330.jpg",
+      "image_id": 8323,
+      "dataset_index": 8323,
+      "time": "2024-04-21T04:43:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00037",
+      "file": "image_20240422052630.jpg",
+      "image_id": 12396,
+      "dataset_index": 12396,
+      "time": "2024-04-22T05:26:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00093",
+      "file": "image_20240422061700.jpg",
+      "image_id": 12497,
+      "dataset_index": 12497,
+      "time": "2024-04-22T06:17:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00081",
+      "file": "image_20240423111430.jpg",
+      "image_id": 12594,
+      "dataset_index": 12594,
+      "time": "2024-04-23T11:14:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00055",
+      "file": "image_20240423120630.jpg",
+      "image_id": 12698,
+      "dataset_index": 12698,
+      "time": "2024-04-23T12:06:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00089",
+      "file": "image_20240426050500.jpg",
+      "image_id": 12827,
+      "dataset_index": 12827,
+      "time": "2024-04-26T05:05:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00057",
+      "file": "image_20240510053130.jpg",
+      "image_id": 8053,
+      "dataset_index": 8053,
+      "time": "2024-05-10T05:31:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00083",
+      "file": "image_20240510055830.jpg",
+      "image_id": 8107,
+      "dataset_index": 8107,
+      "time": "2024-05-10T05:58:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00069",
+      "file": "image_20240510060100.jpg",
+      "image_id": 8112,
+      "dataset_index": 8112,
+      "time": "2024-05-10T06:01:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00042",
+      "file": "image_20240511051000.jpg",
+      "image_id": 13131,
+      "dataset_index": 13131,
+      "time": "2024-05-11T05:10:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00016",
+      "file": "image_20240511061800.jpg",
+      "image_id": 13267,
+      "dataset_index": 13267,
+      "time": "2024-05-11T06:18:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00075",
+      "file": "image_20240511063130.jpg",
+      "image_id": 13294,
+      "dataset_index": 13294,
+      "time": "2024-05-11T06:31:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00065",
+      "file": "image_20240511072230.jpg",
+      "image_id": 13396,
+      "dataset_index": 13396,
+      "time": "2024-05-11T07:22:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00023",
+      "file": "image_20240511073700.jpg",
+      "image_id": 13425,
+      "dataset_index": 13425,
+      "time": "2024-05-11T07:37:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00060",
+      "file": "image_20240511123130.jpg",
+      "image_id": 13895,
+      "dataset_index": 13895,
+      "time": "2024-05-11T12:31:30"
+    },
+    {
+      "frame_ref": "gvccs_val_00004",
+      "file": "image_20240511131100.jpg",
+      "image_id": 13974,
+      "dataset_index": 13974,
+      "time": "2024-05-11T13:11:00"
+    },
+    {
+      "frame_ref": "gvccs_val_00067",
+      "file": "image_20240511143200.jpg",
+      "image_id": 14136,
+      "dataset_index": 14136,
+      "time": "2024-05-11T14:32:00"
+    }
+  ]
+}

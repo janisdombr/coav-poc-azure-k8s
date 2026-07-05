@@ -14,7 +14,7 @@ public class Flight {
     private double heading;            // degrees 0=N 90=E 180=S 270=W
     private boolean contrailDetected;
     private boolean issrZone;
-    private String alert;              // null | "WARNING" | "CRITICAL" | "APPROACHING"
+    private String alert;              // null | "CRITICAL" | "APPROACHING" — ISSR geometry only (P1)
     private String approachingZoneId;  // set when alert = "APPROACHING"
     private Integer approachingMinutes;
     private String timestamp;

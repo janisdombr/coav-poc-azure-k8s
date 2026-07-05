@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import FlightMap from './components/FlightMap.vue'
 import FlightProfile from './components/FlightProfile.vue'
 import AlertPanel from './components/AlertPanel.vue'
+import VerificationPanel from './components/VerificationPanel.vue'
 import SupervisorPanel from './components/SupervisorPanel.vue'
 import FdoPanel from './components/FdoPanel.vue'
 import DashboardPanel from './components/DashboardPanel.vue'
@@ -81,7 +82,10 @@ onMounted(() => {
 
     <main class="coav-main">
       <section class="map-section">
-        <FlightMap />
+        <div class="map-wrap">
+          <FlightMap />
+        </div>
+        <VerificationPanel />
       </section>
 
       <!--
@@ -274,6 +278,14 @@ onMounted(() => {
   flex: 1;
   overflow: hidden;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── Sidebar (desktop) ───────────────────────────────────────────────────── */

@@ -1,11 +1,13 @@
 import { ref, computed } from 'vue'
 import { Client } from '@stomp/stompjs'
 import SockJS from 'sockjs-client'
-import type { Flight, IssrZone, Advisory } from '../types/flight'
+import type { Flight, IssrZone, Advisory, Camera, CameraVerification } from '../types/flight'
 
 const flights               = ref<Flight[]>([])
 const issrZones             = ref<IssrZone[]>([])
 const advisories            = ref<Advisory[]>([])
+const cameras               = ref<Camera[]>([])
+const cameraVerifications   = ref<Record<string, CameraVerification>>({})
 const connected             = ref(false)
 const goAuthorized          = ref(true)   // Supervisor GO/NOGO toggle
 const selectedChartFlightId = ref<string | null>(null)  // shared between AlertPanel → FlightProfile
@@ -72,6 +74,38 @@ async function rejectAdvisory(advisoryId: string): Promise<void> {
   })
 }
 
+async function fetchCameras(): Promise<void> {
+  try {
+    const res = await fetch(`${backendUrl}/api/cameras`)
+    if (!res.ok) throw new Error(`/api/cameras returned ${res.status}`)
+    cameras.value = (await res.json()) as Camera[]
+  } catch (err) {
+    console.error('[useFlightStore] camera list fetch failed:', err)
+  }
+}
+
+async function fetchCameraVerifications(): Promise<void> {
+  try {
+    const res = await fetch(`${backendUrl}/api/camera-verification`)
+    if (!res.ok) return
+    applyCameraVerifications((await res.json()) as CameraVerification[] | CameraVerification)
+  } catch {
+    // non-critical — verifications arrive via WebSocket too
+  }
+}
+
+// Full array = authoritative snapshot (replaces state, drops TTL-expired cameras);
+// single object = incremental update for one camera.
+function applyCameraVerifications(payload: CameraVerification[] | CameraVerification): void {
+  if (Array.isArray(payload)) {
+    const next: Record<string, CameraVerification> = {}
+    payload.forEach(v => { next[v.cameraId] = v })
+    cameraVerifications.value = next
+  } else {
+    cameraVerifications.value = { ...cameraVerifications.value, [payload.cameraId]: payload }
+  }
+}
+
 function connectStomp(): void {
   const wsUrl = backendUrl ? `${backendUrl}/ws` : '/ws'
 
@@ -86,6 +120,9 @@ function connectStomp(): void {
       client.subscribe('/topic/advisories', (msg) => {
         advisories.value = JSON.parse(msg.body) as Advisory[]
       })
+      client.subscribe('/topic/cameras', (msg) => {
+        applyCameraVerifications(JSON.parse(msg.body) as CameraVerification[] | CameraVerification)
+      })
     },
     onDisconnect: () => {
       connected.value = false
@@ -99,6 +136,8 @@ function init(): void {
   initialized = true
   fetchIssrZones()
   fetchAdvisories()
+  fetchCameras()             // static list — fetched once, cached in state
+  fetchCameraVerifications()
   connectStomp()
   // Re-fetch zones every 5 min — backend refreshes from Open-Meteo every 30 min
   setInterval(fetchIssrZones, 5 * 60 * 1000)
@@ -108,6 +147,7 @@ export function useFlightStore() {
   init()
   return {
     flights, issrZones, advisories, connected, goAuthorized,
+    cameras, cameraVerifications,
     criticalFlights, approachingFlights,
     acceptAdvisory, rejectAdvisory,
     backendUrl, selectedChartFlightId,

@@ -33,12 +33,14 @@ function makeFlight(overrides: Partial<Flight> = {}): Flight {
   }
 }
 
+// P1 alert contract: CRITICAL | APPROACHING | null (WARNING removed).
+
 describe('filterAlerts', () => {
   it('returns only flights with active alerts', () => {
     const flights = [
       makeFlight({ flightId: 'A', alert: 'CRITICAL' }),
       makeFlight({ flightId: 'B', alert: null }),
-      makeFlight({ flightId: 'C', alert: 'WARNING' }),
+      makeFlight({ flightId: 'C', alert: 'APPROACHING' }),
     ]
     const result = filterAlerts(flights)
     expect(result).toHaveLength(2)
@@ -52,7 +54,7 @@ describe('filterAlerts', () => {
 
   it('returns all flights when all have alerts', () => {
     const flights = [
-      makeFlight({ alert: 'WARNING' }),
+      makeFlight({ alert: 'APPROACHING' }),
       makeFlight({ flightId: 'B', alert: 'CRITICAL' }),
     ]
     expect(filterAlerts(flights)).toHaveLength(2)
@@ -60,31 +62,31 @@ describe('filterAlerts', () => {
 })
 
 describe('sortByAlertSeverity', () => {
-  it('puts CRITICAL before WARNING', () => {
+  it('puts CRITICAL before APPROACHING', () => {
     const flights = [
-      makeFlight({ flightId: 'W', alert: 'WARNING' }),
+      makeFlight({ flightId: 'A', alert: 'APPROACHING' }),
       makeFlight({ flightId: 'C', alert: 'CRITICAL' }),
     ]
     const sorted = sortByAlertSeverity(flights)
     expect(sorted[0].alert).toBe('CRITICAL')
-    expect(sorted[1].alert).toBe('WARNING')
+    expect(sorted[1].alert).toBe('APPROACHING')
   })
 
   it('keeps multiple CRITICAL flights at the top', () => {
     const flights = [
-      makeFlight({ flightId: 'W1', alert: 'WARNING' }),
+      makeFlight({ flightId: 'A1', alert: 'APPROACHING' }),
       makeFlight({ flightId: 'C1', alert: 'CRITICAL' }),
       makeFlight({ flightId: 'C2', alert: 'CRITICAL' }),
     ]
     const sorted = sortByAlertSeverity(flights)
     expect(sorted[0].alert).toBe('CRITICAL')
     expect(sorted[1].alert).toBe('CRITICAL')
-    expect(sorted[2].alert).toBe('WARNING')
+    expect(sorted[2].alert).toBe('APPROACHING')
   })
 
   it('does not mutate the original array', () => {
     const flights = [
-      makeFlight({ flightId: 'W', alert: 'WARNING' }),
+      makeFlight({ flightId: 'A', alert: 'APPROACHING' }),
       makeFlight({ flightId: 'C', alert: 'CRITICAL' }),
     ]
     const original = [...flights]
@@ -94,10 +96,10 @@ describe('sortByAlertSeverity', () => {
 
   it('is stable for equal severity', () => {
     const flights = [
-      makeFlight({ flightId: 'W1', alert: 'WARNING' }),
-      makeFlight({ flightId: 'W2', alert: 'WARNING' }),
+      makeFlight({ flightId: 'A1', alert: 'APPROACHING' }),
+      makeFlight({ flightId: 'A2', alert: 'APPROACHING' }),
     ]
     const sorted = sortByAlertSeverity(flights)
-    expect(sorted.map(f => f.flightId)).toEqual(['W1', 'W2'])
+    expect(sorted.map(f => f.flightId)).toEqual(['A1', 'A2'])
   })
 })

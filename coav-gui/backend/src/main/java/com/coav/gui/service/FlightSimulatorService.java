@@ -184,9 +184,9 @@ public class FlightSimulatorService {
     private void emit(String flightId, double lat, double lon, int alt, int speed,
                       double heading, String iso) {
         boolean inIssr   = store.isInsideIssrZone(lat, lon, alt);
+        // Simulation flavour only — alerts are derived from ISSR geometry alone
+        // in FlightStateStore.enrichAlert(), same as the live Event Hub path (P1)
         boolean contrail = inIssr || rng.nextDouble() < 0.12;
-        // Base alert from position/contrail — FlightStateStore will upgrade to APPROACHING if needed
-        String  alert    = (contrail && inIssr) ? "CRITICAL" : contrail ? "WARNING" : null;
 
         store.updateFlight(Flight.builder()
             .flightId(flightId)
@@ -194,7 +194,7 @@ public class FlightSimulatorService {
             .altitudeFt(alt).speedKnots(speed)
             .heading(heading)
             .contrailDetected(contrail).issrZone(inIssr)
-            .alert(alert).timestamp(iso)
+            .timestamp(iso)
             .build());
     }
 }

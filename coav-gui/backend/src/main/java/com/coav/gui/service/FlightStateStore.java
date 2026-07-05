@@ -89,12 +89,13 @@ public class FlightStateStore {
     // ── Trajectory projection ──────────────────────────────────────────────────
 
     /**
-     * Overrides alert to "APPROACHING" if the flight will enter an ISSR zone
-     * within APPROACH_HORIZON_MINUTES. Flights already inside a zone keep CRITICAL.
+     * Single source of truth for flight alerts — derived from ISSR geometry ONLY
+     * (P1: camera AI channel is decoupled and never influences flight alerts):
+     * inside a zone → CRITICAL, entering within APPROACH_HORIZON_MINUTES →
+     * APPROACHING, otherwise no alert. Any alert set by the producer is overridden.
      */
     private Flight enrichAlert(Flight f) {
         if (f.isIssrZone()) {
-            // Already inside — keep existing CRITICAL alert, clear approaching fields
             return f.toBuilder()
                     .alert("CRITICAL")
                     .approachingZoneId(null)
@@ -114,8 +115,8 @@ public class FlightStateStore {
                     .build();
         }
 
-        // Keep WARNING/null from the simulator (contrail detection)
         return f.toBuilder()
+                .alert(null)
                 .approachingZoneId(null)
                 .approachingMinutes(null)
                 .build();

@@ -1,17 +1,32 @@
+import base64
 import time
 import datetime
 import os
+import sys
 import math
 import random
 import json as json_lib
 import urllib.request
+from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 from azure.eventhub import EventHubProducerClient, EventData
 
-# ── Telemetry schema (OWASP A03:2021 — validation before sending) ─────────────
+# OpenCV/NumPy power the camera verification channel (listed in requirements.txt).
+# The ADS-B channel must keep running even in a minimal environment without them,
+# so the import is tolerant — CameraProducer disables itself if they are missing.
+try:
+    import cv2
+    import numpy as np
+except ImportError:  # pragma: no cover — CI installs requirements.txt
+    cv2 = None
+    np = None
+
+# ── Telemetry schemas (OWASP A03:2021 — validation before sending) ─────────────
+
 class ADSBTelemetry(BaseModel):
-    message_type: Literal["ADSB_TELEMETRY", "EDGE_VISION_AI"]
+    """Flight-keyed ADS-B position message."""
+    message_type: Literal["ADSB_TELEMETRY"]
     flight_id: str = Field(..., min_length=3, max_length=12, pattern=r"^[A-Z0-9\-]+$")
     timestamp: str
     latitude: float = Field(..., ge=-90.0, le=90.0)
@@ -19,9 +34,34 @@ class ADSBTelemetry(BaseModel):
     altitude_ft: int = Field(..., ge=0, le=60000)
     speed_knots: int = Field(..., ge=0, le=1000)
     heading: float | None = Field(None, ge=0.0, le=360.0)
-    camera_id: str | None = Field(None, min_length=3, max_length=20)
-    contrail_detected: bool | None = None
-    confidence_score: float | None = Field(None, ge=0.0, le=1.0)
+
+
+class EdgeVisionAI(BaseModel):
+    """
+    Camera-keyed ground-camera verification message (Day 11 / P1).
+
+    Deliberately carries NO flight_id — the camera channel is an independent
+    verification feed (decoupled, like MUAC slide 17). Camera→flight attribution
+    is out of scope (P2); flight alerts are pure ISSR geometry on the backend.
+    """
+    message_type: Literal["EDGE_VISION_AI"]
+    camera_id: str = Field(..., min_length=3, max_length=20, pattern=r"^[A-Z][A-Z0-9\-]+$")
+    timestamp: str
+    contrail_detected: bool
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    contrail_pixel_ratio: float = Field(..., ge=0.0, le=1.0)
+    contrail_count: int = Field(..., ge=0, le=500)
+    new_contrail_count: int = Field(..., ge=0, le=500)
+    frame_ref: str = Field(..., min_length=3, max_length=64, pattern=r"^[a-z0-9_\-]+$")
+    # base64 PNG of the segmentation mask, downscaled to ≤256 px (bounded payload)
+    mask_png_b64: str | None = Field(None, max_length=120_000)
+
+
+# Dispatch table for outbound validation — one model per channel
+MODEL_BY_TYPE: dict[str, type[BaseModel]] = {
+    "ADSB_TELEMETRY": ADSBTelemetry,
+    "EDGE_VISION_AI": EdgeVisionAI,
+}
 
 
 # ── ISSR zone management — single source of truth from backend API ─────────────
@@ -94,37 +134,10 @@ def wait_for_dynamic_zones() -> list[dict]:
     return list(FALLBACK_ZONES)
 
 
-def is_inside_zone(lat: float, lon: float, alt: int,
-                   zones: list[dict]) -> bool:
-    """Full zone membership: lat/lon AND altitude."""
-    for z in zones:
-        if (z["minLat"] <= lat <= z["maxLat"] and
-                z["minLon"] <= lon <= z["maxLon"] and
-                z["minAlt"] <= alt <= z["maxAlt"]):
-            return True
-    return False
-
-
-def is_contrail_detectable(lat: float, lon: float, alt: int,
-                           zones: list[dict]) -> bool:
-    """
-    Camera detects a contrail when:
-      - Flight is fully inside an ISSR zone (lat/lon + altitude), OR
-      - Flight is inside zone lat/lon but within 4 000 ft ABOVE the zone ceiling.
-        Reason: the ISSR upper boundary is diffuse; air just above the zone is
-        still cold and humid enough for short-lived contrails.  This produces
-        alert=WARNING on the backend (contrailDetected=True, issrZone=False).
-    """
-    for z in zones:
-        in_latlon = (z["minLat"] <= lat <= z["maxLat"] and
-                     z["minLon"] <= lon <= z["maxLon"])
-        if not in_latlon:
-            continue
-        if z["minAlt"] <= alt <= z["maxAlt"]:
-            return True                           # fully inside zone
-        if z["maxAlt"] < alt <= z["maxAlt"] + 4000:
-            return True                           # near-ISSR ceiling
-    return False
+# NOTE (Day 11 / P1): the flight-keyed contrail helpers (is_inside_zone /
+# is_contrail_detectable) were removed. Flight alerts are now derived from pure
+# ISSR geometry on the backend; the emulator no longer fabricates a per-flight
+# contrail flag. Camera detections live in CameraProducer (camera-keyed).
 
 
 # ── Geography helper ──────────────────────────────────────────────────────────
@@ -143,15 +156,17 @@ def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def compute_simulation(zones: list[dict]) -> dict:
     """
-    Derive simulation parameters from zone geometry so that all four alert
-    states are always visible:
+    Derive simulation parameters from zone geometry so that all three
+    geometry-only alert states are always visible:
 
       CRITICAL   — holding stacks orbit inside the zone
       APPROACHING — transit routes 0–2 enter the zone from outside (start
                     at least 2.2° lat/lon clear of the boundary)
-      WARNING    — route 3 flies above zone ceiling within lat/lon bounds
-                   (contrail detectable via near-ISSR logic, not inside zone)
-      null       — transit routes 0–2 when they have exited the far side
+      null       — transit routes 0–2 after they exit the far side, and
+                   route 3 which flies above the zone ceiling (never enters).
+
+    Alerts are geometry-only (P1): contrail detection no longer drives alert
+    state — that is the decoupled camera verification channel.
     """
     ml = min(z["minLat"] for z in zones);  xl = max(z["maxLat"] for z in zones)
     mn = min(z["minLon"] for z in zones);  xn = max(z["maxLon"] for z in zones)
@@ -160,7 +175,7 @@ def compute_simulation(zones: list[dict]) -> dict:
     clat     = (ml + xl) / 2
     clon     = (mn + xn) / 2
     mid_alt  = int((ma + xa) / 2)          # e.g. FL340 for FL320–360
-    over_alt = xa + 3000                    # above ceiling → WARNING
+    over_alt = xa + 3000                    # above ceiling → no alert (outside zone alt range)
 
     # Approach buffer: 2.2° guarantees > 8 min APPROACHING phase before zone entry
     BUF = 2.2
@@ -178,7 +193,7 @@ def compute_simulation(zones: list[dict]) -> dict:
         # 2  North-East → South-West          [APPROACHING then CRITICAL then null]
         (round(xl + 1.2, 2),   round(xn + 1.2, 2),
          round(ml - 1.0, 2),   round(mn - 1.0, 2)),
-        # 3  East → West ABOVE zone ceiling    [WARNING only, never CRITICAL]
+        # 3  East → West ABOVE zone ceiling    [above ceiling — no alert, never enters zone]
         (round(clat + 1.2, 2), round(xn + 2.5, 2),
          round(clat - 1.2, 2), round(mn - 1.5, 2)),
     ]
@@ -200,7 +215,7 @@ def compute_simulation(zones: list[dict]) -> dict:
         ["DLH", "BAW", "EZY", "IBE", "TAP"],   # E→W
         ["AFR", "TVF", "KLM", "DAT", "VLG"],   # S→N
         ["AUA", "SWR", "BER", "VLR", "DEN"],   # NE→SW
-        ["WZZ", "HOP", "XLR", "TRA", "LFR"],   # Above zone (WARNING)
+        ["WZZ", "HOP", "XLR", "TRA", "LFR"],   # Above zone (no alert)
     ]
     numbers = [
         [437, 214, 316, 551, 682],
@@ -411,30 +426,262 @@ def build_payloads() -> list[dict]:
         if arr_progress >= ARR_DURATION:
             arr_done = True
 
-    # ── 4. Build event pairs — use live zones for contrail/ISSR truth ─────────
+    # ── 5. Build ADS-B events — flight-keyed channel only ─────────────────────
+    # EDGE_VISION_AI is produced separately by CameraProducer (camera-keyed,
+    # decoupled). Flight alerts are pure ISSR geometry on the backend — the
+    # emulator never attaches a contrail flag to a specific flight.
     events: list[dict] = []
     for fid, lat, lon, alt, spd, hdg in active:
-        contrail = is_contrail_detectable(lat, lon, alt, zones_cache)
-        conf     = round(0.88 + 0.08 * math.sin(tick * 0.1), 2) if contrail else 0.12
-        events += [
-            {
-                "message_type": "ADSB_TELEMETRY",
-                "flight_id": fid, "timestamp": iso,
-                "latitude": round(lat, 5), "longitude": round(lon, 5),
-                "altitude_ft": alt, "speed_knots": spd,
-                "heading": round(hdg, 1),
-            },
-            {
-                "message_type": "EDGE_VISION_AI",
-                "camera_id": "STATION-BE-01",
-                "flight_id": fid, "timestamp": iso,
-                "latitude": round(lat, 5), "longitude": round(lon, 5),
-                "altitude_ft": alt, "speed_knots": spd,
-                "contrail_detected": contrail,
-                "confidence_score": conf,
-            },
-        ]
+        events.append({
+            "message_type": "ADSB_TELEMETRY",
+            "flight_id": fid, "timestamp": iso,
+            "latitude": round(lat, 5), "longitude": round(lon, 5),
+            "altitude_ft": alt, "speed_knots": spd,
+            "heading": round(hdg, 1),
+        })
     return events
+
+
+# ── Camera verification channel (Day 11 / P1) ─────────────────────────────────
+#
+# Independent camera-keyed channel: real U-Net segmentation (edge-pi/python/
+# inference.py, weights optional) or an OpenCV heuristic fallback, running on
+# held-out GVCCS *val* frames (split seed=42, identical to train.py — never
+# frames the model saw in training).
+#
+# Caveat (also stated in UI/README): physically ONE GVCCS camera
+# (Brétigny-sur-Orge), time-sliced across 4 virtual positions to illustrate
+# the planned MUAC ground-camera network (techspec 3.1(3)).
+#
+# CAMERAS is a Python copy of the Java constant (coav-gui backend CameraStore)
+# — keep both in sync.
+
+CAMERAS: list[dict] = [
+    {"id": "CAM-ALPHA", "lat": 50.60, "lon": 4.60, "elevation_cutoff_deg": 20.0},
+    {"id": "CAM-BRAVO", "lat": 51.90, "lon": 7.00, "elevation_cutoff_deg": 20.0},
+    {"id": "CAM-EHBK",  "lat": 50.92, "lon": 5.77, "elevation_cutoff_deg": 20.0},
+    {"id": "CAM-NORTH", "lat": 52.30, "lon": 6.50, "elevation_cutoff_deg": 20.0},
+]
+
+# Held-out GVCCS val frames — generate with: python prepare_val_frames.py
+FRAMES_DIR = Path(os.getenv("FRAMES_DIR",
+                            str(Path(__file__).resolve().parent / "frames")))
+# Location of edge-pi/python/inference.py (ContrailDetector)
+INFERENCE_DIR = os.getenv(
+    "INFERENCE_DIR",
+    str(Path(__file__).resolve().parent.parent / "edge-pi" / "python"))
+
+MASK_MAX_SIDE       = 256    # mask downscale for PNG payload + temporal delta
+MIN_COMPONENT_PX    = 12     # ignore speckle components below this area (≤256px scale)
+PIXEL_RATIO_MIN     = 0.001  # detection floor — mirrors inference.PIXEL_RATIO_THRESHOLD
+
+
+class CameraProducer:
+    """
+    Emits one EDGE_VISION_AI message per camera per tick.
+
+    Frame source priority:
+      1. FRAMES_DIR/manifest.json — GVCCS held-out val frames (prepare_val_frames.py)
+      2. Synthetic sky frames (deterministic, in-memory) — CI/demo without data
+
+    Inference priority:
+      1. ContrailDetector from edge-pi/python/inference.py
+         (itself falls back ONNX → PyTorch → OpenCV heuristic when weights absent)
+      2. Built-in OpenCV heuristic (mirror of inference.py fallback) when
+         inference.py is not shipped with the container
+    """
+
+    def __init__(self, frames_dir: Path | None = None,
+                 cameras: list[dict] | None = None):
+        self.cameras = cameras if cameras is not None else CAMERAS
+        self.enabled = cv2 is not None and np is not None
+        self._frames: list[dict] = []          # [{frame_ref, path|None}]
+        self._synthetic: dict = {}             # frame_ref → np.ndarray
+        self._cursor = [0] * len(self.cameras)
+        self._prev_mask: dict = {c["id"]: None for c in self.cameras}
+        self.detector = None
+        if not self.enabled:
+            print("[Camera] OpenCV/NumPy unavailable — camera channel disabled "
+                  "(ADS-B channel keeps running)")
+            return
+        self._load_frames(Path(frames_dir) if frames_dir else FRAMES_DIR)
+        self.detector = self._init_detector()
+
+    # ── Frame loading ──────────────────────────────────────────────────────────
+
+    def _load_frames(self, frames_dir: Path) -> None:
+        manifest = frames_dir / "manifest.json"
+        if manifest.exists():
+            try:
+                with open(manifest) as f:
+                    data = json_lib.load(f)
+                for entry in data.get("frames", []):
+                    path = frames_dir / entry["file"]
+                    if path.exists():
+                        self._frames.append(
+                            {"frame_ref": entry["frame_ref"], "path": path})
+            except (OSError, ValueError, KeyError) as exc:
+                print(f"[Camera] Bad manifest {manifest}: {exc}")
+        if self._frames:
+            print(f"[Camera] {len(self._frames)} GVCCS held-out val frames "
+                  f"(split seed=42, same as train.py) from {frames_dir}")
+        else:
+            self._frames = self._make_synthetic_frames()
+            print("[Camera] No GVCCS frames found — using synthetic sky frames. "
+                  "Run prepare_val_frames.py to extract the real val split.")
+
+    def _make_synthetic_frames(self) -> list[dict]:
+        """Deterministic synthetic sky frames — keeps demo/CI alive without data."""
+        rng = random.Random(42)
+        lines_per_frame = [0, 1, 2, 0, 3, 1, 0, 2]   # mix of clear / contrail skies
+        frames = []
+        h, w = 480, 640
+        t = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+        base = np.dstack([                            # BGR gradient sky
+            np.broadcast_to(180 - t * 60, (h, w)),
+            np.broadcast_to(120 + t * 40, (h, w)),
+            np.broadcast_to(80 + t * 60, (h, w)),
+        ]).astype(np.float32)
+        for i, n_lines in enumerate(lines_per_frame):
+            noise = np.random.default_rng(100 + i).integers(-8, 8, (h, w, 3))
+            img = np.clip(base + noise, 0, 255).astype(np.uint8)
+            for _ in range(n_lines):
+                y1 = rng.randint(20, h // 2 - 20)
+                y2 = rng.randint(20, h // 2 - 20)
+                cv2.line(img, (rng.randint(0, 60), y1),
+                         (w - rng.randint(0, 60), y2), (245, 245, 255),
+                         rng.randint(3, 6))
+            img = cv2.GaussianBlur(img, (3, 3), 0)
+            ref = f"synthetic_{i:05d}"
+            self._synthetic[ref] = img
+            frames.append({"frame_ref": ref, "path": None})
+        return frames
+
+    # ── Inference backends ─────────────────────────────────────────────────────
+
+    def _init_detector(self):
+        try:
+            if INFERENCE_DIR not in sys.path:
+                sys.path.insert(0, INFERENCE_DIR)
+            from inference import ContrailDetector  # noqa: PLC0415
+            # WEIGHTS_PATH: optional .pt override (e.g. edge-pi/data/
+            # contrail_unet_best.pt) — without it ContrailDetector checks its
+            # default weights dir and falls back to its OpenCV heuristic.
+            weights = os.getenv("WEIGHTS_PATH")
+            det = ContrailDetector(weights_path=weights) if weights \
+                else ContrailDetector()
+            print(f"[Camera] ContrailDetector ready — "
+                  f"backend={getattr(det, '_backend', '?')}")
+            return det
+        except Exception as exc:
+            print(f"[Camera] inference.py unavailable ({exc}) — "
+                  "built-in OpenCV heuristic fallback")
+            return None
+
+    def _detect(self, frame) -> tuple[bool, float, float, "np.ndarray"]:
+        """→ (detected, confidence, pixel_ratio, binary mask 0/255 full-res)."""
+        if self.detector is not None:
+            r = self.detector.detect(frame)
+            return (bool(r.contrail_detected), float(r.confidence),
+                    float(r.pixel_ratio), r.mask)
+        return self._heuristic(frame)
+
+    @staticmethod
+    def _heuristic(frame) -> tuple[bool, float, float, "np.ndarray"]:
+        """Mirror of inference.py OpenCV fallback — bright straight lines in sky."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        sky  = gray[:gray.shape[0] // 2, :]
+        _, bright = cv2.threshold(sky, 200, 255, cv2.THRESH_BINARY)
+        edges = cv2.Canny(bright, 50, 150)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80,
+                                minLineLength=80, maxLineGap=20)
+        sky_mask = np.zeros(sky.shape[:2], dtype=np.uint8)
+        if lines is not None:
+            for x1, y1, x2, y2 in lines.reshape(-1, 4):
+                cv2.line(sky_mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, 8)
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        mask[:sky.shape[0]] = sky_mask
+        pixel_ratio = float((mask > 0).sum()) / mask.size
+        confidence  = min(pixel_ratio * 20, 0.85)
+        return pixel_ratio > PIXEL_RATIO_MIN, confidence, pixel_ratio, mask
+
+    # ── Per-frame analysis ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _downscale_mask(mask):
+        h, w = mask.shape[:2]
+        scale = MASK_MAX_SIDE / max(h, w)
+        if scale >= 1.0:
+            return mask
+        return cv2.resize(mask, (max(1, int(w * scale)), max(1, int(h * scale))),
+                          interpolation=cv2.INTER_NEAREST)
+
+    def _analyse(self, camera_id: str, entry: dict) -> dict:
+        ref = entry["frame_ref"]
+        if entry["path"] is None:
+            frame = self._synthetic[ref]
+        else:
+            frame = cv2.imread(str(entry["path"]))
+        if frame is None:
+            raise ValueError(f"unreadable frame {entry['path']}")
+
+        detected, confidence, pixel_ratio, mask = self._detect(frame)
+        small  = self._downscale_mask((mask > 0).astype(np.uint8) * 255)
+        binary = (small > 0).astype(np.uint8)
+
+        # Connected components = individual contrail instances
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        valid = [lab for lab in range(1, n_labels)
+                 if stats[lab, cv2.CC_STAT_AREA] >= MIN_COMPONENT_PX]
+        contrail_count = len(valid)
+
+        # Temporal delta vs previous frame of THIS camera: a component is "new"
+        # when it has zero overlap with the (dilated) previous mask.
+        prev = self._prev_mask[camera_id]
+        if prev is None or prev.shape != binary.shape:
+            new_count = contrail_count
+        else:
+            prev_dil = cv2.dilate(prev, np.ones((7, 7), np.uint8))
+            new_count = sum(1 for lab in valid
+                            if not prev_dil[labels == lab].any())
+        self._prev_mask[camera_id] = binary
+
+        ok, buf = cv2.imencode(".png", small)
+        mask_b64 = base64.b64encode(buf).decode("ascii") if ok else None
+
+        return {
+            "message_type": "EDGE_VISION_AI",
+            "camera_id": camera_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            # detection must be consistent with the reported instance count
+            "contrail_detected": bool(detected and contrail_count > 0),
+            "confidence": round(confidence, 3),
+            "contrail_pixel_ratio": round(pixel_ratio, 6),
+            "contrail_count": contrail_count,
+            "new_contrail_count": new_count,
+            "frame_ref": ref,
+            "mask_png_b64": mask_b64,
+        }
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def produce(self) -> list[dict]:
+        """One EDGE_VISION_AI payload per camera (camera-keyed, no flight_id)."""
+        if not self.enabled or not self._frames:
+            return []
+        events: list[dict] = []
+        n = len(self.cameras)
+        for k, cam in enumerate(self.cameras):
+            sub = self._frames[k::n]     # time-sliced single physical camera
+            if not sub:
+                continue
+            entry = sub[self._cursor[k] % len(sub)]
+            self._cursor[k] += 1
+            try:
+                events.append(self._analyse(cam["id"], entry))
+            except Exception as exc:     # one bad frame must not kill the loop
+                print(f"[Camera] {cam['id']} frame {entry['frame_ref']} failed: {exc}")
+        return events
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -458,8 +705,10 @@ def main():
     on_fallback = {z["id"] for z in zones_cache}.issubset(_fallback_ids)
 
     init_simulation(zones_cache)
+    camera_producer = CameraProducer()
     print(f"[COAV Emulator] Running — "
-          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure + 1 arrival"
+          f"{len(ROUTES)} transit routes + {len(HOLDS)} holds + 1 departure + 1 arrival "
+          f"+ {len(camera_producer.cameras)} ground cameras"
           f"{' [fallback zones — will upgrade automatically]' if on_fallback else ''}")
 
     producer = EventHubProducerClient.from_connection_string(
@@ -484,17 +733,27 @@ def main():
                         on_fallback = new_ids.issubset(_fallback_ids)
                     last_zone_refresh = time.time()
 
-                raw_payloads = build_payloads()
+                adsb_payloads   = build_payloads()
+                camera_payloads = camera_producer.produce()
                 try:
                     batch = producer.create_batch()
-                    for raw in raw_payloads:
-                        telemetry = ADSBTelemetry(**raw)
-                        batch.add(EventData(telemetry.model_dump_json()))
-                        print(f"  [x] {raw['message_type']:20s} {raw['flight_id']:8s} "
-                              f"lat={raw['latitude']:.3f} lon={raw['longitude']:.3f} "
-                              f"alt={raw['altitude_ft']}ft spd={raw['speed_knots']}kt")
+                    for raw in adsb_payloads + camera_payloads:
+                        msg = MODEL_BY_TYPE[raw["message_type"]](**raw)
+                        batch.add(EventData(msg.model_dump_json()))
+                        if raw["message_type"] == "ADSB_TELEMETRY":
+                            print(f"  [x] {raw['message_type']:20s} {raw['flight_id']:8s} "
+                                  f"lat={raw['latitude']:.3f} lon={raw['longitude']:.3f} "
+                                  f"alt={raw['altitude_ft']}ft spd={raw['speed_knots']}kt")
+                        else:
+                            print(f"  [x] {raw['message_type']:20s} {raw['camera_id']:10s} "
+                                  f"frame={raw['frame_ref']} "
+                                  f"detected={raw['contrail_detected']} "
+                                  f"conf={raw['confidence']:.2f} "
+                                  f"contrails={raw['contrail_count']} "
+                                  f"(new {raw['new_contrail_count']})")
                     producer.send_batch(batch)
-                    print(f"  --- tick={tick} aircraft={len(raw_payloads) // 2} ---")
+                    print(f"  --- tick={tick} aircraft={len(adsb_payloads)} "
+                          f"cameras={len(camera_payloads)} ---")
                 except ValidationError as ve:
                     print(f"  [OWASP ALERT] Validation failed: {ve}")
 

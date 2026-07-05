@@ -3,9 +3,10 @@ import { ref, watch, onMounted, onUnmounted } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useFlightStore } from '../composables/useFlightStore'
-import type { Flight, IssrZone } from '../types/flight'
+import { isFlightInCameraFov } from '../utils/cameraFov'
+import type { Camera, Flight, IssrZone } from '../types/flight'
 
-const { flights, issrZones, approachingFlights } = useFlightStore()
+const { flights, issrZones, cameras, approachingFlights } = useFlightStore()
 
 const mapEl = ref<HTMLDivElement | null>(null)
 let map: L.Map | null = null
@@ -13,10 +14,13 @@ const markerMap   = new Map<string, L.CircleMarker>()
 const approachMap = new Map<string, L.Polyline>()   // dashed lines to ISSR zones
 let zoneLayer: L.LayerGroup | null = null            // cleared and redrawn on every zone update
 
+type CameraAlertState = Flight['alert']              // strongest alert among flights in FOV
+const cameraMarkerMap = new Map<string, L.Marker>()
+const cameraStateMap  = new Map<string, CameraAlertState>()
+
 function alertColor(alert: Flight['alert']): string {
   if (alert === 'CRITICAL')   return '#ff4444'
   if (alert === 'APPROACHING') return '#ff8c00'
-  if (alert === 'WARNING')    return '#ffaa00'
   return '#44ff88'
 }
 
@@ -48,6 +52,71 @@ function drawZones(zones: IssrZone[]): void {
         { direction: 'top' }
       )
       .addTo(zoneLayer!)
+  })
+}
+
+const VIDEOCAM_SVG =
+  '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">' +
+  '<path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/></svg>'
+
+function cameraIcon(state: CameraAlertState): L.DivIcon {
+  const alertClass = state ? ` cam-marker--${state.toLowerCase()}` : ''
+  return L.divIcon({
+    className: 'cam-marker-wrap', // neutral wrapper — Leaflet default icon styles off
+    html: `<div class="cam-marker${alertClass}">${VIDEOCAM_SVG}</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  })
+}
+
+function cameraTooltip(camera: Camera, inFov: Flight[]): string {
+  const base = `<b>${camera.id}</b><br>all-sky · elevation ≥ ${camera.elevationCutoffDeg}°`
+  if (!inFov.length) return base
+  const list = inFov.map(f => `${f.flightId} (${f.alert})`).join(', ')
+  return `${base}<br>Alerted in FOV: ${list}`
+}
+
+const ALERT_RANK: Record<string, number> = { CRITICAL: 0, APPROACHING: 1 }
+
+function strongestAlert(inFov: Flight[]): CameraAlertState {
+  if (!inFov.length) return null
+  return inFov.reduce((worst, f) =>
+    ALERT_RANK[f.alert as string] < ALERT_RANK[worst.alert as string] ? f : worst
+  ).alert
+}
+
+function drawCameras(cams: Camera[]): void {
+  if (!map) return
+  cameraMarkerMap.forEach(m => m.remove())
+  cameraMarkerMap.clear()
+  cameraStateMap.clear()
+  cams.forEach(camera => {
+    const marker = L.marker([camera.lat, camera.lon], {
+      icon: cameraIcon(null),
+      zIndexOffset: -100, // below flight markers
+    })
+      .bindTooltip(cameraTooltip(camera, []), { direction: 'top' })
+      .addTo(map!)
+    cameraMarkerMap.set(camera.id, marker)
+    cameraStateMap.set(camera.id, null)
+  })
+  updateCameraHighlights(flights.value)
+}
+
+// Highlight stays in lockstep with flight alerts: recomputed on every /topic/flights tick.
+function updateCameraHighlights(current: Flight[]): void {
+  if (!cameraMarkerMap.size) return
+  const alerted = current.filter(f => f.alert !== null)
+  cameras.value.forEach(camera => {
+    const marker = cameraMarkerMap.get(camera.id)
+    if (!marker) return
+    const inFov = alerted.filter(f => isFlightInCameraFov(camera, f))
+    const state = strongestAlert(inFov)
+    if (cameraStateMap.get(camera.id) !== state) {
+      marker.setIcon(cameraIcon(state))
+      cameraStateMap.set(camera.id, state)
+    }
+    marker.setTooltipContent(cameraTooltip(camera, inFov))
   })
 }
 
@@ -120,7 +189,11 @@ function updateMarkers(current: Flight[]): void {
 }
 
 watch(issrZones, (zones) => drawZones(zones))
-watch(flights, (current) => updateMarkers(current))
+watch(cameras, (cams) => drawCameras(cams))
+watch(flights, (current) => {
+  updateMarkers(current)
+  updateCameraHighlights(current)
+})
 
 onMounted(() => {
   if (!mapEl.value) return
@@ -138,6 +211,7 @@ onMounted(() => {
 
   // Watchers fire before onMounted if the store already has data — replay missed updates
   drawZones(issrZones.value)
+  drawCameras(cameras.value)
   updateMarkers(flights.value)
 })
 
@@ -155,5 +229,40 @@ onUnmounted(() => {
 .flight-map {
   width: 100%;
   height: 100%;
+}
+
+/* :deep() — L.divIcon HTML is injected by Leaflet without scoped attributes */
+.flight-map :deep(.cam-marker-wrap) { background: none; border: none; }
+
+.flight-map :deep(.cam-marker) {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: #161b22;
+  border: 1.5px solid #58a6ff;
+  color: #58a6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  transition: border-color 0.3s, color 0.3s, box-shadow 0.3s;
+}
+
+.flight-map :deep(.cam-marker--critical) {
+  border-color: #ff4444;
+  color: #ff4444;
+  box-shadow: 0 0 10px rgba(255, 68, 68, 0.9);
+}
+
+.flight-map :deep(.cam-marker--approaching) {
+  border-color: #ff8c00;
+  color: #ff8c00;
+  box-shadow: 0 0 9px rgba(255, 140, 0, 0.85);
+}
+
+.flight-map :deep(.cam-marker--warning) {
+  border-color: #ffaa00;
+  color: #ffaa00;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.8);
 }
 </style>

@@ -105,25 +105,8 @@ const criticalZone = computed(() => {
   ) ?? null
 })
 
-const warningZone = computed(() => {
-  const f = selectedFlight.value
-  if (!f || f.alert !== 'WARNING') return null
-  const BUF = 1.0
-  const fl  = Math.round(f.altitudeFt / 100)
-  const candidates = issrZones.value.filter(z =>
-    f.latitude  >= z.minLat - BUF && f.latitude  <= z.maxLat + BUF &&
-    f.longitude >= z.minLon - BUF && f.longitude <= z.maxLon + BUF
-  )
-  if (!candidates.length) return null
-  return (
-    candidates.find(z => fl >= Math.round(z.minAlt / 100) && fl <= Math.round(z.maxAlt / 100))
-    ?? candidates[0]
-  )
-})
-
 const activeZone = computed(() =>
   criticalZone.value ??
-  warningZone.value ??
   (selectedFlight.value?.approachingZoneId
     ? issrZones.value.find(z => z.id === selectedFlight.value!.approachingZoneId) ?? null
     : null)
@@ -172,24 +155,6 @@ const annotations = computed(() => {
   if (!f) return result
 
   const perspLabel = perspective.value === 'lat' ? 'Lat' : perspective.value === 'lon' ? 'Lon' : 'FL'
-
-  if (f.alert === 'WARNING' && warningZone.value) {
-    const { lo, hi } = zoneY(warningZone.value)
-    result['issrWarning'] = {
-      type: 'box', xMin: -5, xMax: 25,
-      yMin: lo, yMax: hi,
-      backgroundColor: 'rgba(255,170,0,0.08)',
-      borderColor: 'rgba(255,170,0,0.35)',
-      borderWidth: 1, borderDash: [4, 3],
-      label: {
-        display: true,
-        content: `ISSR Zone ${warningZone.value.id} (contrail risk) [${perspLabel}]`,
-        color: '#ffaa00', font: { size: 9, weight: 'bold' },
-        position: { x: 'center', y: 'start' }, yAdjust: 6
-      }
-    }
-    return result
-  }
 
   if (f.alert === 'CRITICAL' && criticalZone.value) {
     const { lo, hi } = zoneY(criticalZone.value)

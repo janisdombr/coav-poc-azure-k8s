@@ -14,10 +14,22 @@ def test_build_payloads_returns_events():
     assert len(payloads) > 0
 
 
-def test_each_aircraft_emits_adsb_and_vision_pair():
+# Day 11 / P1: the old flight-keyed ADSB+VISION pair contract is gone.
+# build_payloads() is ADS-B only; EDGE_VISION_AI comes from CameraProducer
+# (camera-keyed, one event per camera per tick, no flight_id) — see
+# test_camera_producer.py for that channel.
+
+def test_build_payloads_is_adsb_only():
     payloads = build_payloads()
-    types = [p["message_type"] for p in payloads]
-    assert types.count("ADSB_TELEMETRY") == types.count("EDGE_VISION_AI")
+    types = {p["message_type"] for p in payloads}
+    assert types == {"ADSB_TELEMETRY"}
+
+
+def test_adsb_payloads_carry_no_camera_fields():
+    for raw in build_payloads():
+        assert "camera_id" not in raw
+        assert "contrail_detected" not in raw   # per-flight contrail flag removed
+        assert "mask_png_b64" not in raw
 
 
 def test_all_payloads_pass_schema_validation():
@@ -34,11 +46,10 @@ def test_adsb_payloads_contain_heading():
             assert 0.0 <= raw["heading"] < 360.0, f"heading out of range: {raw['heading']}"
 
 
-def test_vision_ai_payloads_have_no_heading():
-    """EDGE_VISION_AI messages are camera events — no heading field needed."""
+def test_adsb_payloads_all_have_flight_id():
+    """ADSB_TELEMETRY is the flight-keyed channel — flight_id is mandatory."""
     for raw in build_payloads():
-        if raw["message_type"] == "EDGE_VISION_AI":
-            assert "heading" not in raw
+        assert raw["flight_id"]
 
 
 def test_flight_ids_match_muac_callsign_format():
@@ -78,7 +89,8 @@ def test_route_2_heading_is_southwestward():
 
 
 def test_route_3_heading_is_westward():
-    # Route 3: above zone ceiling (WARNING only), flies east → west, expect ~230–300°
+    # Route 3: above zone ceiling (no alert — outside zone altitude band),
+    # flies east → west, expect ~230–300°
     assert 230.0 < ROUTE_HEADINGS[3] < 300.0, f"Expected W, got {ROUTE_HEADINGS[3]}"
 
 
