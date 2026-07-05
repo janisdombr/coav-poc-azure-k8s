@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useFlightStore } from '../composables/useFlightStore'
 import type { Camera, CameraVerification } from '../types/flight'
 
 const { cameras, cameraVerifications } = useFlightStore()
+
+// Collapse the note + cards (kept for a compact view inside the Cameras tab).
+const collapsed = ref(false)
 
 interface CameraCard {
   camera: Camera
@@ -17,8 +20,13 @@ const cards = computed<CameraCard[]>(() =>
   }))
 )
 
+const detectedCount = computed(() =>
+  cards.value.filter(c => c.verification?.contrailDetected).length
+)
+
 function maskDataUrl(v: CameraVerification): string | null {
-  return v.maskPngB64 ? `data:image/png;base64,${v.maskPngB64}` : null
+  // Field name is legacy (mask_png_b64); payload is a JPEG viz frame with contrails in red.
+  return v.maskPngB64 ? `data:image/jpeg;base64,${v.maskPngB64}` : null
 }
 
 function confidencePct(v: CameraVerification): string {
@@ -32,18 +40,31 @@ function timeHms(iso: string): string {
 </script>
 
 <template>
-  <section class="verif-panel">
+  <section class="verif-panel" :class="{ collapsed }">
     <div class="verif-header">
+      <button
+        class="verif-toggle"
+        :class="{ open: !collapsed }"
+        @click="collapsed = !collapsed"
+        :title="collapsed ? 'Expand cameras' : 'Collapse cameras'"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
       <span class="verif-title">Ground camera verification — GVCCS held-out (decoupled)</span>
-      <span class="verif-note">
+      <span v-if="collapsed" class="verif-summary">
+        {{ cards.length }} cams · <strong :class="{ hot: detectedCount > 0 }">{{ detectedCount }}</strong> detected
+      </span>
+      <span v-else class="verif-note">
         Frames from one GVCCS camera (Brétigny), time-sliced across 4 virtual positions
         — illustrates the planned MUAC camera network
       </span>
     </div>
 
-    <div v-if="!cards.length" class="verif-empty">Waiting for camera list (/api/cameras)…</div>
+    <div v-show="!collapsed && !cards.length" class="verif-empty">Waiting for camera list (/api/cameras)…</div>
 
-    <div v-else class="cam-row">
+    <div v-show="!collapsed && cards.length" class="cam-row">
       <div
         v-for="{ camera, verification } in cards"
         :key="camera.id"
@@ -91,20 +112,51 @@ function timeHms(iso: string): string {
 
 <style scoped>
 .verif-panel {
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
   background: #0d1117;
-  border-top: 1px solid #21262d;
   display: flex;
   flex-direction: column;
 }
 
 .verif-header {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   padding: 6px 12px 4px;
   min-width: 0;
 }
+.verif-panel.collapsed .verif-header { padding-bottom: 6px; }
+
+.verif-toggle {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #21262d;
+  border-radius: 5px;
+  color: #8b949e;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.2s, color 0.15s, border-color 0.15s;
+}
+.verif-toggle:hover { color: #e6edf3; border-color: #484f58; }
+/* chevron points down when open (click to collapse), right when collapsed */
+.verif-toggle       { transform: rotate(-90deg); }
+.verif-toggle.open  { transform: rotate(0deg); }
+
+.verif-summary {
+  font-size: 10px;
+  color: #8b949e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.verif-summary strong { color: #8b949e; }
+.verif-summary strong.hot { color: #ff8c00; }
 
 .verif-title {
   font-size: 11px;
@@ -132,14 +184,16 @@ function timeHms(iso: string): string {
 
 .cam-row {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 4px 12px 10px;
-  overflow-x: auto;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .cam-card {
-  flex: 1 1 0;
-  min-width: 180px;
+  flex: 0 0 auto;
   display: flex;
   gap: 8px;
   background: #161b22;
@@ -168,7 +222,7 @@ function timeHms(iso: string): string {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  image-rendering: pixelated; /* masks are downscaled ≤256px — keep edges crisp */
+  image-rendering: auto; /* JPEG viz frame (photo + red overlay) — smooth, not pixelated */
 }
 
 .cam-nodata {

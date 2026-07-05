@@ -125,6 +125,7 @@ edge-pi/node/node_modules/
 edge-pi/data/
 edge-pi/python/weights/
 edge-pi/python/sample_synthetic.jpg
-# GVCCS held-out val frames for the emulator camera channel
-# (generate locally: cd edge-emulator && python prepare_val_frames.py)
+# GVCCS held-out val frames ARE committed in edge-emulator/frames/ (GVCCS is
+# CC BY 4.0 — redistribution allowed with attribution; see frames/README.md).
+# Regenerate locally: cd edge-emulator && python prepare_val_frames.py
 interview_prep.md

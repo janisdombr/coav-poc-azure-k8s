@@ -12,7 +12,7 @@ import { useFlightStore } from './composables/useFlightStore'
 const { connected, flights, criticalFlights, advisories } = useFlightStore()
 
 const isSidebarOpen = ref(true)
-const activeTab = ref<'supervisor' | 'fdo' | 'atco' | 'dashboard'>('atco')
+const activeTab = ref<'supervisor' | 'fdo' | 'atco' | 'dashboard' | 'cameras'>('atco')
 const alertCount    = computed(() => criticalFlights.value.length)
 const advisoryCount = computed(() => advisories.value.length)
 
@@ -85,7 +85,6 @@ onMounted(() => {
         <div class="map-wrap">
           <FlightMap />
         </div>
-        <VerificationPanel />
       </section>
 
       <!--
@@ -169,6 +168,10 @@ onMounted(() => {
               :class="['role-pill', { active: activeTab === 'dashboard' }]"
               @click="activeTab = 'dashboard'"
             >Dashboard</button>
+            <button
+              :class="['role-pill', { active: activeTab === 'cameras' }]"
+              @click="activeTab = 'cameras'"
+            >Cameras</button>
           </div>
 
           <!-- Tab panels -->
@@ -191,6 +194,10 @@ onMounted(() => {
 
           <div class="tab-panel" v-show="activeTab === 'dashboard'">
             <DashboardPanel />
+          </div>
+
+          <div class="tab-panel" v-show="activeTab === 'cameras'">
+            <VerificationPanel />
           </div>
         </div>
       </aside>
@@ -392,19 +399,22 @@ onMounted(() => {
 /* ── Role selector pill bar ──────────────────────────────────────────────── */
 .role-bar {
   display: flex;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 8px 8px;
   border-bottom: 1px solid #21262d;
   flex-shrink: 0;
 }
 
 .role-pill {
   flex: 1;
+  min-width: 0;
   height: 28px;
-  font-size: 11px;
+  padding: 0 4px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
+  white-space: nowrap;
   border-radius: 14px;
   border: 1px solid #21262d;
   background: transparent;
