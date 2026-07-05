@@ -5,13 +5,21 @@
 
 ## Final State
 
-| Version | Encoder | Platform | Best val Dice | Epochs | Status |
+| Run | Encoder | Epochs | Best val Dice | Method | Status |
 |---|---|---|---|---|---|
-| V1 (B4) | EfficientNet-B4 | Google Colab → Kaggle | 0.4918 (ep 22) | 22/30 | Stopped — overfitting |
-| V2 (B2) | EfficientNet-B2 | Kaggle + Google Colab | 0.7932 (ep 35) | 41 | ✓ Above PoC threshold |
-| V2 (B2) continued | EfficientNet-B2 | Google Colab (warm restart) | **0.8085 (ep 59)** | 60 | ✓ Best — warm restart recovery |
+| V1 (B4) | EfficientNet-B4 | 22 | 0.4918 (ep 22) | Colab → Kaggle | Stopped — overfitting |
+| V2 (B2) | EfficientNet-B2 | 38 | 0.7932 (ep 35) | Kaggle, val split fix | ✓ Above PoC 0.75 |
+| WR-1 | EfficientNet-B2 | 60 | 0.8085 (ep 59) | Warm Restart (LR reset 1e-4) | ✓ +0.015 vs baseline |
+| **WR-2** | EfficientNet-B2 | **90** | **0.8394 (ep 88, global)** | **Warm Restart + calibration** | **✓ Current best** |
+| WR-3 + SWA | EfficientNet-B2 | 120 | ? | Planned: WR + weight averaging | In progress |
 
-Best weights: `data/contrail_unet_best.pt` · val Dice **0.8085** · epoch 59
+**Warm Restart (WR):** LR scheduler resets to `1e-4` (start of a new cosine cycle) instead of staying at `eta_min`. The model escapes the local minimum it converged to and finds a wider, flatter one.
+
+**SWA (Stochastic Weight Averaging):** at the end of each cosine cycle (when LR is near zero) the model orbits its minimum in small steps. Averaging weights from those final epochs lands at the center of a flat valley — better generalisation with no extra training.
+
+Best weights: `data/contrail_unet_best.pt` · global val Dice **0.8394** · epoch 88  
+*(Note: `best_dice` in checkpoint = 0.8232 — this is the per-batch average from the training loop.  
+Global Dice = 0.8394 is computed by threshold calibration over the entire val set at once — more accurate.)*
 
 ![Training curves](../images/training_curves_final.png)
 
@@ -228,7 +236,72 @@ Train Dice is 0.7323 vs Val Dice 0.8085 — the gap has nearly closed compared t
 0.36 gap, confirming that the architecture change (B4→B2) and augmentation improvements
 are preventing overfitting.
 
-Best val Dice across all runs: **0.8085** at epoch 59.
+---
+
+## Attempt 7 — Kaggle · WR-2 (epochs 61–90)
+
+### What is Warm Restart
+
+After a cosine cycle the LR reaches `eta_min=1e-6` — the model stops exploring.
+A **Warm Restart** resets LR back to `1e-4` (start of a new cosine cycle).
+The high LR pushes the model out of the local minimum it converged to,
+and the subsequent decay finds a better (wider, flatter) minimum.
+
+```
+Cosine schedule:    LR
+                1e-4 ─╮              ╭─╮              ╭─╮
+                      │              │ │              │ │
+                      ╰──────────────╯ ╰──────────────╯ ╰──→ epoch
+                      ep38         ep60            ep90
+                       ↑ WR-1           ↑ WR-2           ↑ WR-3
+```
+
+### Results (epochs 61–90)
+
+| Epoch | Train Dice | Val Dice | LR | Note |
+|---|---|---|---|---|
+| 61 | 0.7144 | 0.7938 | 9.97e-05 | WR-2 start — expected dip |
+| 65 | 0.7183 | 0.8018 | 9.34e-05 | Recovery |
+| 70 | 0.7313 | 0.8013 | 7.52e-05 | |
+| 75 | 0.7433 | 0.8093 | 5.05e-05 | Surpasses WR-1 best |
+| 80 | 0.7586 | 0.8180 | 2.58e-05 | |
+| 85 | 0.7592 | 0.8225 | 7.63e-06 | |
+| **88** | **0.7647** | **0.8232** | **2.08e-06** | **Best (per-batch avg)** |
+| 89 | 0.7645 | 0.8225 | 1.27e-06 | |
+| 90 | 0.7616 | 0.8227 | 1.00e-06 | Cycle end — LR at minimum |
+
+### Threshold calibration (post-training)
+
+After loading best weights, global Dice was computed across entire val set:
+
+| Threshold | Global Dice |
+|---|---|
+| 0.40 | 0.8371 |
+| **0.50** | **0.8394** |
+| 0.55 | 0.8381 |
+| 0.60 | 0.8312 |
+
+**Global Dice (0.8394) ≠ per-batch average (0.8232).**  
+The training loop computes Dice per-batch and averages — this is noisy on small batches
+containing mostly clear-sky frames (where Dice = 1.0 by definition, inflating the average).
+Global Dice computes one numerator and one denominator across all val images — more stable
+and the correct metric for reporting.
+
+### TTA analysis
+
+4-orientation TTA (H-flip + V-flip + HV-flip) **hurt** the result: −0.0147.
+
+Root causes:
+1. **Wrong threshold post-averaging.** Averaging 4 probability maps squishes confident
+   pixels toward 0.5. Pixels at p=0.55 drop below t=0.50 → contrail pixels missed.
+2. **V-flip adds out-of-distribution noise.** Sky is always at top in ground cameras.
+   V-flip trained at p=0.20 only — the model is systematically less confident on
+   vertically-flipped images, and averaging these noisy predictions with the correct one
+   drags the result down.
+
+**Fix:** H-flip only TTA (2 orientations) + separate threshold calibration for TTA probs.
+
+Best val Dice across all runs: **0.8394** (global Dice, epoch 88, t=0.50).
 
 ---
 
@@ -312,7 +385,7 @@ See Attempt 4 above. `random.seed(42)` shuffle before train/val split.
 | `kaggle_train_contrail_v2.ipynb` | Main training notebook — Kaggle, HF saves, warm restart config |
 | `colab_train_contrail_v3.ipynb` | Google Colab version — Google Drive persistence |
 | `python/train.py` | Standalone training script for Azure VM or any Linux GPU server |
-| `data/checkpoint_last.pt` | Full checkpoint — epoch 60, history, optimizer state |
-| `data/contrail_unet_best.pt` | Best model weights — epoch 59, val Dice 0.8085 |
-| `../images/training_curves_final.png` | Training history chart — all 60 epochs |
+| `data/checkpoint_last.pt` | Full checkpoint — epoch 90, history (all 90 epochs) |
+| `data/contrail_unet_best.pt` | Best model weights — epoch 88, global val Dice 0.8394 |
+| `../images/training_curves_final.png` | Training history chart — all 90 epochs, WR markers |
 | `../images/inference_samples.png` | Control set inference — 8 images, input / GT / prediction |

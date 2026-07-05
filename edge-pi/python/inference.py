@@ -175,24 +175,18 @@ class ContrailDetector:
         return self._postprocess(prob, frame_bgr.shape[:2], "pytorch")
 
     def _tta_prob(self, inp):
-        """Average sigmoid probabilities over 4 flip augmentations."""
+        """H-flip only TTA: average of original + horizontal flip.
+
+        V-flip and HV-flip hurt for ground-camera contrails: sky is always at top,
+        so vertically-flipped images are out-of-distribution. H-flip is safe because
+        contrails are symmetric under left/right reflection.
+        """
         torch = self._torch
-        variants = [
-            inp,
-            torch.flip(inp, [-1]),       # H-flip
-            torch.flip(inp, [-2]),       # V-flip
-            torch.flip(inp, [-1, -2]),   # HV-flip
-        ]
-        preds = []
         with torch.no_grad():
-            for v in variants:
-                p = torch.sigmoid(self._model(v))[0, 0]
-                preds.append(p)
-        # Undo flips so spatial positions align before averaging
-        preds[1] = torch.flip(preds[1], [-1])
-        preds[2] = torch.flip(preds[2], [-2])
-        preds[3] = torch.flip(preds[3], [-1, -2])
-        return torch.stack(preds).mean(0).numpy()
+            p_orig  = torch.sigmoid(self._model(inp))[0, 0]
+            p_hflip = torch.sigmoid(self._model(torch.flip(inp, [-1])))[0, 0]
+            p_hflip = torch.flip(p_hflip, [-1])   # undo flip before averaging
+        return ((p_orig + p_hflip) / 2).numpy()
 
     # ── OpenCV heuristic fallback ──────────────────────────────────────────────
 

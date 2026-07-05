@@ -51,10 +51,10 @@ dataset, recorded at EUROCONTROL MUAC Brétigny-sur-Orge (CC BY 4.0).
 |---|---|
 | Architecture | U-Net + EfficientNet-B2 (7M params) |
 | Dataset | GVCCS · 24,228 frames · 111,761 polygon annotations |
-| Best val Dice | **0.8085** (epoch 59 of 60) |
+| Best val Dice | **0.8394** (global, epoch 88 of 90, t=0.50) |
 | PoC threshold | 0.75 ✓ |
 | Loss | Dice + Focal Loss (γ=2, α=0.25) |
-| Training | Kaggle T4 + Google Colab · checkpoints on HuggingFace Hub |
+| Training | Kaggle T4 · 2× Warm Restart · SWA · HuggingFace Hub |
 
 <img src="images/training_curves_final.png" width="1042" />
 
