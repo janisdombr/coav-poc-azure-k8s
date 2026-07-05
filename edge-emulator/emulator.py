@@ -484,10 +484,13 @@ class CameraProducer:
       1. FRAMES_DIR/manifest.json — GVCCS held-out val frames (prepare_val_frames.py)
       2. Synthetic sky frames (deterministic, in-memory) — CI/demo without data
 
-    Inference priority:
-      1. ContrailDetector from edge-pi/python/inference.py
+    Inference source priority (Day 11 / P1, offline-precompute variant "B"):
+      1. FRAMES_DIR/precomputed.json — real U-Net results, precomputed offline
+         (see precompute_inference.py) and replayed with numpy+opencv only —
+         no torch/segmentation_models_pytorch needed in the cloud image.
+      2. ContrailDetector from edge-pi/python/inference.py
          (itself falls back ONNX → PyTorch → OpenCV heuristic when weights absent)
-      2. Built-in OpenCV heuristic (mirror of inference.py fallback) when
+      3. Built-in OpenCV heuristic (mirror of inference.py fallback) when
          inference.py is not shipped with the container
     """
 
@@ -497,15 +500,26 @@ class CameraProducer:
         self.enabled = cv2 is not None and np is not None
         self._frames: list[dict] = []          # [{frame_ref, path|None}]
         self._synthetic: dict = {}             # frame_ref → np.ndarray
+        self._from_manifest = False            # real GVCCS frames vs synthetic fallback
         self._cursor = [0] * len(self.cameras)
         self._prev_mask: dict = {c["id"]: None for c in self.cameras}
         self.detector = None
+        self._precomputed: dict | None = None  # frame_ref → precomputed inference result
+        self.source = "opencv"
         if not self.enabled:
             print("[Camera] OpenCV/NumPy unavailable — camera channel disabled "
                   "(ADS-B channel keeps running)")
             return
-        self._load_frames(Path(frames_dir) if frames_dir else FRAMES_DIR)
-        self.detector = self._init_detector()
+        resolved_dir = Path(frames_dir) if frames_dir else FRAMES_DIR
+        self._load_frames(resolved_dir)
+        if self._from_manifest:
+            self._precomputed = self._load_precomputed(resolved_dir)
+        if self._precomputed is not None:
+            self.source = "precomputed"
+        else:
+            self.detector = self._init_detector()
+            self.source = "live-model" if self.detector is not None else "opencv"
+        print(f"[Camera] camera source = {self.source}")
 
     # ── Frame loading ──────────────────────────────────────────────────────────
 
@@ -522,6 +536,7 @@ class CameraProducer:
                             {"frame_ref": entry["frame_ref"], "path": path})
             except (OSError, ValueError, KeyError) as exc:
                 print(f"[Camera] Bad manifest {manifest}: {exc}")
+        self._from_manifest = bool(self._frames)
         if self._frames:
             print(f"[Camera] {len(self._frames)} GVCCS held-out val frames "
                   f"(split seed=42, same as train.py) from {frames_dir}")
@@ -529,6 +544,32 @@ class CameraProducer:
             self._frames = self._make_synthetic_frames()
             print("[Camera] No GVCCS frames found — using synthetic sky frames. "
                   "Run prepare_val_frames.py to extract the real val split.")
+
+    def _load_precomputed(self, frames_dir: Path) -> dict | None:
+        """
+        Load offline-precomputed U-Net inference results (precompute_inference.py,
+        "variant B"). When present, the emulator replays real model output using
+        only numpy+opencv — no torch/segmentation_models_pytorch in this image.
+        """
+        path = frames_dir / "precomputed.json"
+        if not path.exists():
+            return None
+        try:
+            with open(path) as f:
+                bundle = json_lib.load(f)
+            frames = bundle.get("frames", {})
+            if not frames:
+                print(f"[Camera] {path} has no frames — ignoring, falling back")
+                return None
+            print(f"[Camera] {len(frames)} precomputed inference results loaded "
+                  f"from {path} (backend={bundle.get('backend', '?')}, "
+                  f"threshold={bundle.get('threshold', '?')}) — replay mode, "
+                  f"no model/torch required")
+            return frames
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"[Camera] Bad precomputed bundle {path}: {exc} — "
+                  "falling back to live-model/opencv")
+            return None
 
     def _make_synthetic_frames(self) -> list[dict]:
         """Deterministic synthetic sky frames — keeps demo/CI alive without data."""
@@ -616,8 +657,70 @@ class CameraProducer:
         return cv2.resize(mask, (max(1, int(w * scale)), max(1, int(h * scale))),
                           interpolation=cv2.INTER_NEAREST)
 
+    def _temporal_delta(self, camera_id: str, binary: "np.ndarray") -> tuple[int, int]:
+        """
+        binary: 0/1 mask at MASK_MAX_SIDE scale for THIS camera's current frame.
+        → (contrail_count, new_contrail_count).
+
+        Connected components = individual contrail instances. A component is "new"
+        when it has zero overlap with the (dilated) previous frame's mask for this
+        camera. Shared by both the live-model/opencv path and the precomputed-replay
+        path so the delta semantics are identical regardless of inference source.
+        """
+        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        valid = [lab for lab in range(1, n_labels)
+                 if stats[lab, cv2.CC_STAT_AREA] >= MIN_COMPONENT_PX]
+        contrail_count = len(valid)
+
+        prev = self._prev_mask[camera_id]
+        if prev is None or prev.shape != binary.shape:
+            new_count = contrail_count
+        else:
+            prev_dil = cv2.dilate(prev, np.ones((7, 7), np.uint8))
+            new_count = sum(1 for lab in valid
+                            if not prev_dil[labels == lab].any())
+        self._prev_mask[camera_id] = binary
+        return contrail_count, new_count
+
+    def _analyse_precomputed(self, camera_id: str, ref: str) -> dict:
+        """
+        Replay a real U-Net result computed offline by precompute_inference.py
+        ("variant B"). Uses only numpy+opencv — no torch/segmentation_models_pytorch
+        in this process. new_contrail_count is still derived at replay time via
+        _temporal_delta, because the per-camera frame sequence (frames[k::n]) is a
+        runtime concern, not something that can be baked into the offline bundle.
+        """
+        data = self._precomputed.get(ref)
+        if data is None:
+            raise ValueError(f"frame_ref {ref} missing from precomputed bundle")
+
+        png = base64.b64decode(data["mask_small_b64"])
+        small = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_GRAYSCALE)
+        binary = (small > 0).astype(np.uint8)
+        contrail_count, new_count = self._temporal_delta(camera_id, binary)
+
+        pixel_ratio = float(data["pixel_ratio"])
+        confidence  = float(data["confidence"])
+        detected    = pixel_ratio > PIXEL_RATIO_MIN
+
+        return {
+            "message_type": "EDGE_VISION_AI",
+            "camera_id": camera_id,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "contrail_detected": bool(detected and contrail_count > 0),
+            "confidence": round(confidence, 3),
+            "contrail_pixel_ratio": round(pixel_ratio, 6),
+            "contrail_count": contrail_count,
+            "new_contrail_count": new_count,
+            "frame_ref": ref,
+            "mask_png_b64": data["viz_jpeg_b64"],
+        }
+
     def _analyse(self, camera_id: str, entry: dict) -> dict:
         ref = entry["frame_ref"]
+        if self._precomputed is not None:
+            return self._analyse_precomputed(camera_id, ref)
+
         if entry["path"] is None:
             frame = self._synthetic[ref]
         else:
@@ -629,22 +732,7 @@ class CameraProducer:
         small  = self._downscale_mask((mask > 0).astype(np.uint8) * 255)
         binary = (small > 0).astype(np.uint8)
 
-        # Connected components = individual contrail instances
-        n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-        valid = [lab for lab in range(1, n_labels)
-                 if stats[lab, cv2.CC_STAT_AREA] >= MIN_COMPONENT_PX]
-        contrail_count = len(valid)
-
-        # Temporal delta vs previous frame of THIS camera: a component is "new"
-        # when it has zero overlap with the (dilated) previous mask.
-        prev = self._prev_mask[camera_id]
-        if prev is None or prev.shape != binary.shape:
-            new_count = contrail_count
-        else:
-            prev_dil = cv2.dilate(prev, np.ones((7, 7), np.uint8))
-            new_count = sum(1 for lab in valid
-                            if not prev_dil[labels == lab].any())
-        self._prev_mask[camera_id] = binary
+        contrail_count, new_count = self._temporal_delta(camera_id, binary)
 
         # Visualisation: downscaled camera frame with detected contrails painted red.
         # JPEG-encoded — a photographic frame as PNG is ~100-140 KB of base64, which blows

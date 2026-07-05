@@ -10,16 +10,21 @@
 | V1 (B4) | EfficientNet-B4 | 22 | 0.4918 (ep 22) | Colab → Kaggle | Stopped — overfitting |
 | V2 (B2) | EfficientNet-B2 | 38 | 0.7932 (ep 35) | Kaggle, val split fix | ✓ Above PoC 0.75 |
 | WR-1 | EfficientNet-B2 | 60 | 0.8085 (ep 59) | Warm Restart (LR reset 1e-4) | ✓ +0.015 vs baseline |
-| **WR-2** | EfficientNet-B2 | **90** | **0.8394 (ep 88, global)** | **Warm Restart + calibration** | **✓ Current best** |
-| WR-3 + SWA | EfficientNet-B2 | 120 | ? | Planned: WR + weight averaging | In progress |
+| **WR-2** | EfficientNet-B2 | **90** | **0.8394 (ep 88, global)** | **Warm Restart + calibration** | **✓ Current best (calibrated)** |
+| WR-3 + SWA | EfficientNet-B2 | 120 | 0.8343 (ep 116, per-batch EMA) · SWA avg 0.8249 (ep118-120) | Warm Restart + weight averaging | Plateau — SWA −0.0094 vs EMA, kept EMA |
 
 **Warm Restart (WR):** LR scheduler resets to `1e-4` (start of a new cosine cycle) instead of staying at `eta_min`. The model escapes the local minimum it converged to and finds a wider, flatter one.
 
 **SWA (Stochastic Weight Averaging):** at the end of each cosine cycle (when LR is near zero) the model orbits its minimum in small steps. Averaging weights from those final epochs lands at the center of a flat valley — better generalisation with no extra training.
 
-Best weights: `data/contrail_unet_best.pt` · global val Dice **0.8394** · epoch 88  
-*(Note: `best_dice` in checkpoint = 0.8232 — this is the per-batch average from the training loop.  
-Global Dice = 0.8394 is computed by threshold calibration over the entire val set at once — more accurate.)*
+Best weights (current `data/contrail_unet_best.pt`): epoch 116, per-batch EMA val Dice **0.8343**.
+This is the best single-checkpoint snapshot across the full 120-epoch run (WR-1 + WR-2 + WR-3 + SWA);
+it supersedes the WR-2 epoch-88 weights that were previously calibrated to a global Dice of 0.8394.
+**The global Dice for this new epoch-116 checkpoint has not been recalibrated** (threshold sweep
+over the full val set is a multi-minute GPU pass — not re-run for this update). Until it is,
+**0.8394 (WR-2, epoch 88, t=0.50) remains the last confirmed calibrated reference number** for
+reporting purposes; the honest summary is that the model has **plateaued around 0.83–0.84 Dice**
+since WR-2, and WR-3 + SWA did not produce a clear further improvement. See Attempt 8 below.
 
 ![Training curves](../images/training_curves_final.png)
 
@@ -305,6 +310,85 @@ Best val Dice across all runs: **0.8394** (global Dice, epoch 88, t=0.50).
 
 ---
 
+## Attempt 8 — Kaggle/Colab · WR-3 + SWA (epochs 91–120)
+
+### What is SWA
+
+**Stochastic Weight Averaging (SWA)** maintains a running average of the model's weights
+during the final, low-LR portion of a cosine cycle, instead of just keeping the single
+snapshot with the best per-batch Dice. Near the end of a cycle the optimiser orbits a
+minimum in small steps; averaging several nearby snapshots lands closer to the centre of
+that flat region, which typically generalises slightly better than any one snapshot
+("no free extra training" — same weights, different combination).
+
+```python
+def update_swa(model):
+    # Welford-style online average of model.parameters()
+    global swa_model, swa_n
+    swa_n += 1
+    if swa_model is None:
+        swa_model = copy.deepcopy(model)
+        return
+    for p_avg, p_new in zip(swa_model.parameters(), model.parameters()):
+        p_avg.data.mul_(1 - 1 / swa_n).add_(p_new.data / swa_n)
+```
+
+Planned: average the final 10 epochs of the WR-3 cycle (epoch 111–120, `SWA_START_EP=111`
+in `kaggle_train_contrail_v2.ipynb`).
+
+### What actually happened
+
+The WR-3 cosine cycle (T_max=30, restart at epoch 91) decayed smoothly from `lr=9.97e-05`
+down to `lr=5.28e-06` by epoch 116 — on schedule. Epoch 117 is missing from the recorded
+history (a session interruption around that point), and when the notebook resumed at
+epoch 118 the LR scheduler was **not restored from the checkpoint** (`START_LR = 1e-4`,
+by design, for warm restarts) — so it jumped straight back up to `9.97e-05` instead of
+continuing the decay. This amounted to an unplanned micro-restart for the last 3 epochs.
+Because the in-memory `swa_model` accumulator is also not persisted across a session
+restart, SWA effectively only had 3 snapshots to average (epochs 118–120) instead of the
+planned 10 (111–120).
+
+| Epoch | Train Dice | Val Dice (per-batch) | LR | Note |
+|---|---|---|---|---|
+| 116 | 0.7786 | **0.8343** | 5.28e-06 | Best single-checkpoint (EMA) of the whole 120-epoch run |
+| 118 | 0.7633 | 0.8258 | 9.97e-05 | swa#1 — post-restart, LR back near cycle start |
+| 119 | 0.7619 | 0.8221 | 9.89e-05 | swa#2 |
+| 120 | 0.7608 | 0.8211 | 9.76e-05 | swa#3 |
+
+```
+SWA (3 snapshots, ep118-120) val Dice (per-batch avg): 0.8249
+EMA best (ep116):                                       0.8343
+Gain:                                                   -0.0094  →  EMA kept
+```
+
+### Conclusion — plateau confirmed
+
+- SWA under-delivered here **because it only averaged 3 post-restart snapshots that were
+  still mid-decay from a fresh LR reset**, not 10 converged low-LR snapshots as designed.
+  Averaging weights that are still actively moving toward a minimum is not the same as
+  averaging weights that are already orbiting one — this explains the negative gain
+  (−0.0094), consistent with the general SWA literature (it only helps once the weights
+  have actually converged).
+- Even the best single checkpoint of the whole run (epoch 116, per-batch EMA 0.8343) is a
+  *per-batch* metric, not directly comparable to the *global, calibrated* Dice of 0.8394
+  reported for WR-2's epoch-88 checkpoint. No new global calibration was run for epoch 116
+  (would require a multi-minute full-val-set GPU pass) — see the note under Final State.
+- Taking the two numbers together, the honest read is: **the model has plateaued in the
+  ~0.83–0.84 Dice range since WR-2**; three additional Warm Restart cycles (WR-1 → WR-2 → WR-3)
+  and now SWA have not produced a clear further improvement. Further gains would likely need
+  more/better-annotated data or architecture changes rather than more optimisation schedule
+  tricks.
+
+### Lessons
+
+- **Persist LR scheduler state, not just model weights, across session restarts** — the
+  intentional "fresh restart LR" design for *planned* Warm Restarts also fires
+  *unintentionally* on a crash-recovery mid-cycle, corrupting an in-progress cosine decay.
+- **Persist the SWA accumulator (`swa_model`, `swa_n`) alongside the checkpoint** — otherwise
+  a session interruption silently shrinks the averaging window without any error or warning.
+
+---
+
 ## Compute Resources
 
 ### Kaggle GPU quota
@@ -385,7 +469,7 @@ See Attempt 4 above. `random.seed(42)` shuffle before train/val split.
 | `kaggle_train_contrail_v2.ipynb` | Main training notebook — Kaggle, HF saves, warm restart config |
 | `colab_train_contrail_v3.ipynb` | Google Colab version — Google Drive persistence |
 | `python/train.py` | Standalone training script for Azure VM or any Linux GPU server |
-| `data/checkpoint_last.pt` | Full checkpoint — epoch 90, history (all 90 epochs) |
-| `data/contrail_unet_best.pt` | Best model weights — epoch 88, global val Dice 0.8394 |
-| `../images/training_curves_final.png` | Training history chart — all 90 epochs, WR markers |
-| `../images/inference_samples.png` | Control set inference — 8 images, input / GT / prediction |
+| `data/checkpoint_last.pt` | Full checkpoint — epoch 120, history (119 of 120 epochs logged; ep117 lost to a session interruption) |
+| `data/contrail_unet_best.pt` | Best model weights — epoch 116, per-batch EMA val Dice 0.8343 (supersedes the WR-2 epoch-88/0.8394-global weights; not yet recalibrated) |
+| `../images/training_curves_final.png` | Training history chart — all 120 epochs, WR-1/WR-2/WR-3 markers + SWA phase (ep118-120) |
+| `../images/inference_samples.png` | Control set inference — 8 images, input / GT / prediction (not regenerated this run — see report) |

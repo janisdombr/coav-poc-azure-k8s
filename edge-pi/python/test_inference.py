@@ -45,7 +45,19 @@ def contrail_frame():
 
 
 @pytest.fixture
-def detector():
+def no_weights(monkeypatch):
+    """
+    Force ContrailDetector's auto-discovery to find nothing, regardless of
+    whether edge-pi/data/*.pt happens to exist on the machine running the
+    tests (those weights are gitignored and dev-machine-specific).
+    """
+    import inference as inf
+    monkeypatch.setattr(inf, "FALLBACK_WEIGHTS_CANDIDATES", [])
+    monkeypatch.delenv("WEIGHTS_PATH", raising=False)
+
+
+@pytest.fixture
+def detector(no_weights):
     """ContrailDetector with no weights — always uses OpenCV fallback."""
     return ContrailDetector()
 
@@ -236,7 +248,7 @@ class TestSyntheticEndToEnd:
         assert result.mask.shape == synthetic_frame.shape[:2]
         assert result.backend in ("onnx", "pytorch", "opencv")
 
-    def test_opencv_detects_drawn_contrails(self, synthetic_frame):
+    def test_opencv_detects_drawn_contrails(self, synthetic_frame, no_weights):
         """The synthetic image has two bright diagonal lines — HoughLinesP should find them."""
         result = ContrailDetector().detect(synthetic_frame)
         assert result.backend == "opencv"   # no weights in test env

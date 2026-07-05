@@ -4,7 +4,10 @@ Contrail detection via semantic segmentation.
 Architecture : U-Net + EfficientNet-B2 (7M params)
 Training data: GVCCS — 24,228 frames from EUROCONTROL MUAC ground cameras, Brétigny-sur-Orge
                (Zenodo: 10.5281/zenodo.15743988)
-Best val Dice: 0.8085 (epoch 59 of 60, calibrated threshold 0.45, TTA +0.5-1%)
+Best val Dice: 0.8394 (global, calibrated, WR-2 epoch 88 of 90, t=0.50).
+               Plateaued at ~0.83-0.84 through WR-3 + SWA (epoch 120); deployed weights
+               are the epoch-116 EMA checkpoint (per-batch 0.8343, not re-calibrated).
+               See edge-pi/TRAINING_LOG.md.
 
 Inference    : PyTorch (GPU/CPU), ONNX Runtime (ARM — Raspberry Pi, Jetson)
                Falls back to OpenCV heuristic if neither is available
@@ -18,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from dataclasses import dataclass, field
@@ -28,17 +32,39 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Ensure the weights-resolution log (path/size/sha256/backend) is visible even
+# when the importing process (e.g. edge-emulator/emulator.py) never calls
+# logging.basicConfig() itself. No-op if the root logger already has handlers.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
 # ── Model config ───────────────────────────────────────────────────────────────
 MODEL_DIR = Path(__file__).parent / "weights"
 PT_PATH   = MODEL_DIR / "contrail_unet.pt"    # U-Net EfficientNet-B2 weights
 ONNX_PATH = MODEL_DIR / "contrail_unet.onnx"  # exported after training
+
+# repo_root/edge-pi/python/inference.py -> repo_root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Auto-discovery fallback order when PT_PATH (weights/contrail_unet.pt) is
+# missing — checked in this order, first existing file wins:
+#   1. WEIGHTS_PATH env var (explicit override)
+#   2. edge-pi/data/contrail_unet_best.pt  — plain state_dict, best val Dice
+#   3. edge-pi/data/checkpoint_last.pt     — full checkpoint dict (epoch/best_dice/model_state)
+_FALLBACK_DATA_DIR = _REPO_ROOT / "edge-pi" / "data"
+FALLBACK_WEIGHTS_CANDIDATES = [
+    _FALLBACK_DATA_DIR / "contrail_unet_best.pt",
+    _FALLBACK_DATA_DIR / "checkpoint_last.pt",
+]
 
 ENCODER    = "efficientnet-b2"
 INPUT_SIZE = (512, 512)
 PIXEL_MEAN = [0.485, 0.456, 0.406]
 PIXEL_STD  = [0.229, 0.224, 0.225]
 
-# Calibrated on val set after 60-epoch training — optimal F1/Dice trade-off
+# WR-2 val calibration favoured t=0.50 (global Dice 0.8394); the current epoch-116 EMA
+# weights were not re-calibrated. Kept at 0.45 (slightly more sensitive) — conservative
+# default that also keeps demo masks clearly visible.
 DEFAULT_THRESHOLD   = 0.45
 PIXEL_RATIO_THRESHOLD = 0.001   # 0.1% of frame (~250 pixels at 512×512)
 
@@ -79,26 +105,56 @@ class ContrailDetector:
         self._session  = None
         self._model    = None
         self._backend  = "opencv"
-
-        # Allow override of default weight path
-        if weights_path is not None:
-            global PT_PATH
-            PT_PATH = Path(weights_path)
+        # Resolved .pt path for this instance — never mutates the module-level
+        # PT_PATH default, so instances/tests don't leak state into each other.
+        self._pt_path: Path | None = None
+        self._explicit_weights_path = Path(weights_path) if weights_path is not None else None
 
         self._init_model()
+        logger.info("ContrailDetector ready — final backend=%s", self._backend)
 
     # ── Initialisation ─────────────────────────────────────────────────────────
+
+    def _resolve_pt_path(self) -> Path | None:
+        """
+        Resolve which .pt weights file to load.
+
+        Priority: explicit weights_path (constructor arg) > default
+        MODEL_DIR/contrail_unet.pt > WEIGHTS_PATH env > edge-pi/data/
+        contrail_unet_best.pt > edge-pi/data/checkpoint_last.pt.
+        """
+        if self._explicit_weights_path is not None and self._explicit_weights_path.exists():
+            return self._explicit_weights_path
+        if PT_PATH.exists():
+            return PT_PATH
+        if self._explicit_weights_path is not None:
+            # Caller explicitly asked for a path and it doesn't exist —
+            # still fall through to auto-discovery below as a last resort.
+            logger.warning("Explicit weights_path %s not found — trying auto-discovery",
+                            self._explicit_weights_path)
+
+        env_path = os.getenv("WEIGHTS_PATH")
+        candidates = ([Path(env_path)] if env_path else []) + FALLBACK_WEIGHTS_CANDIDATES
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
 
     def _init_model(self) -> None:
         if ONNX_PATH.exists():
             self._load_onnx()
-        elif PT_PATH.exists():
+            return
+
+        resolved = self._resolve_pt_path()
+        if resolved is not None:
+            self._pt_path = resolved
             self._load_pytorch()
         else:
             logger.warning(
-                "No weights found in %s — OpenCV heuristic fallback active. "
-                "Copy contrail_unet.pt from HuggingFace to %s.",
-                MODEL_DIR, PT_PATH,
+                "No weights found in %s or fallback locations (%s) — "
+                "OpenCV heuristic fallback active. Copy contrail_unet.pt "
+                "or set WEIGHTS_PATH.",
+                MODEL_DIR, ", ".join(str(c) for c in FALLBACK_WEIGHTS_CANDIDATES),
             )
 
     def _load_onnx(self) -> None:
@@ -121,15 +177,27 @@ class ContrailDetector:
         try:
             import torch
             self._torch = torch
+
+            pt_path = self._pt_path
+            size_bytes = pt_path.stat().st_size
+            sha12 = _sha256_prefix(pt_path)
+            logger.info(
+                "Loading PyTorch weights: path=%s size=%.1fMB sha256=%s",
+                pt_path, size_bytes / 1e6, sha12,
+            )
+
             self._model = _build_unet_b2()
-            state = torch.load(str(PT_PATH), map_location="cpu", weights_only=True)
-            # checkpoint_last.pt wraps state in 'model_state'; best .pt is plain state_dict
-            if isinstance(state, dict) and "model_state" in state:
-                state = state["model_state"]
+            raw = torch.load(str(pt_path), map_location="cpu", weights_only=True)
+            state, meta = _extract_state_dict(raw)
+            if meta:
+                logger.info(
+                    "Checkpoint metadata: epoch=%s best_dice=%s",
+                    meta.get("epoch"), meta.get("best_dice"),
+                )
             self._model.load_state_dict(state)
             self._model.eval()
             self._backend = "pytorch"
-            logger.info("ContrailDetector: PyTorch backend (%s)", PT_PATH.name)
+            logger.info("ContrailDetector: PyTorch backend (%s)", pt_path.name)
         except ImportError:
             logger.warning("torch not installed — using OpenCV heuristic fallback")
 
@@ -226,6 +294,30 @@ class ContrailDetector:
                                mask_orig, backend, tta=self.use_tta)
 
 
+def _sha256_prefix(path: Path, n: int = 12, chunk_size: int = 1 << 20) -> str:
+    """First `n` hex chars of the file's sha256 — cheap fingerprint for logs."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()[:n]
+
+
+def _extract_state_dict(raw: dict) -> tuple[dict, dict | None]:
+    """
+    Accepts either a plain state_dict (contrail_unet_best.pt) or a checkpoint
+    dict (checkpoint_last.pt: epoch/encoder/model_state/best_dice/history).
+
+    Returns (state_dict, checkpoint_meta_or_None).
+    """
+    if isinstance(raw, dict):
+        for key in ("model_state", "state_dict"):
+            if key in raw:
+                meta = {k: v for k, v in raw.items() if k != key}
+                return raw[key], meta
+    return raw, None
+
+
 # ── Model architecture ─────────────────────────────────────────────────────────
 
 def _build_unet_b2():
@@ -265,9 +357,8 @@ def export_to_onnx(
     """Export trained PyTorch checkpoint to ONNX for ARM deployment."""
     import torch
     model = _build_unet_b2()
-    state = torch.load(str(pt_path), map_location="cpu", weights_only=True)
-    if isinstance(state, dict) and "model_state" in state:
-        state = state["model_state"]
+    raw = torch.load(str(pt_path), map_location="cpu", weights_only=True)
+    state, _meta = _extract_state_dict(raw)
     model.load_state_dict(state)
     model.eval()
     dummy = torch.randn(1, 3, *INPUT_SIZE)

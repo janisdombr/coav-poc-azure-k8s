@@ -129,3 +129,4 @@ edge-pi/python/sample_synthetic.jpg
 # CC BY 4.0 — redistribution allowed with attribution; see frames/README.md).
 # Regenerate locally: cd edge-emulator && python prepare_val_frames.py
 interview_prep.md
+docs/eurocontrol-context.md

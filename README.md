@@ -51,10 +51,11 @@ dataset, recorded at EUROCONTROL MUAC Brétigny-sur-Orge (CC BY 4.0).
 |---|---|
 | Architecture | U-Net + EfficientNet-B2 (7M params) |
 | Dataset | GVCCS · 24,228 frames · 111,761 polygon annotations |
-| Best val Dice | **0.8394** (global, epoch 88 of 90, t=0.50) |
+| Best val Dice | **0.8394** (global, calibrated, WR-2 epoch 88 of 90, t=0.50) |
+| Latest run | WR-3 + SWA · 120 epochs · plateau confirmed (per-batch EMA 0.8343, SWA avg 0.8249 — worse, kept EMA) |
 | PoC threshold | 0.75 ✓ |
 | Loss | Dice + Focal Loss (γ=2, α=0.25) |
-| Training | Kaggle T4 · 2× Warm Restart · SWA · HuggingFace Hub |
+| Training | Kaggle T4 · 3× Warm Restart · SWA · HuggingFace Hub |
 
 <img src="images/training_curves_final.png" width="1042" />
 
@@ -430,7 +431,7 @@ coav-poc-azure-k8s/
 │   ├── python/train.py              — Standalone training script (Azure VM / Linux)
 │   ├── kaggle_train_contrail_v2.ipynb — Kaggle training notebook with HF checkpoint saves
 │   ├── colab_train_contrail_v3.ipynb  — Google Colab version with Drive persistence
-│   └── TRAINING_LOG.md              — Full training history (41 epochs, val Dice 0.7932)
+│   └── TRAINING_LOG.md              — Full training history (120 epochs, best global val Dice 0.8394)
 ├── backend/
 │   └── main.py                      — Python K8s backend v1 (initial prototype; superseded by
 │                                      coav-gui/backend once the Java requirement was found in the spec)

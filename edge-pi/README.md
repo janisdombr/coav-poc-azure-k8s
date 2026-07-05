@@ -53,7 +53,11 @@ The edge device sends only the **inference result** (200 bytes), not raw frames.
 
 **Architecture:** U-Net + EfficientNet-B2  
 **Training dataset:** GVCCS (Ground Visible Camera Contrail Sequences)  
-**Best val Dice:** 0.8394 (global Dice, epoch 88 of 90, t=0.50)
+**Best val Dice:** 0.8394 (global Dice, calibrated, WR-2 epoch 88 of 90, t=0.50)  
+**Latest run (WR-3 + SWA, 120 epochs):** plateau — per-batch EMA 0.8343 (ep116), SWA-averaged
+0.8249 (ep118-120, worse by −0.0094 → EMA kept). Global-Dice recalibration was not re-run for
+this checkpoint (compute cost); 0.8394 remains the last confirmed calibrated figure. See
+[TRAINING_LOG.md](TRAINING_LOG.md) — Attempt 8.
 
 Training history and all technical decisions → [TRAINING_LOG.md](TRAINING_LOG.md)
 
