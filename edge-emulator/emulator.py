@@ -629,6 +629,14 @@ class CameraProducer:
         small  = self._downscale_mask((mask > 0).astype(np.uint8) * 255)
         binary = (small > 0).astype(np.uint8)
 
+        viz_frame = cv2.resize(frame, (small.shape[1], small.shape[0]))
+
+        if detected and contrail_count > 0:
+            output_frame = viz_frame.copy()
+            output_frame[binary > 0] = [0, 0, 255]
+        else:
+            output_frame = viz_frame
+
         # Connected components = individual contrail instances
         n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
         valid = [lab for lab in range(1, n_labels)
@@ -646,7 +654,7 @@ class CameraProducer:
                             if not prev_dil[labels == lab].any())
         self._prev_mask[camera_id] = binary
 
-        ok, buf = cv2.imencode(".png", small)
+        ok, buf = cv2.imencode(".png", output_frame) # image with red mask instead gray mask
         mask_b64 = base64.b64encode(buf).decode("ascii") if ok else None
 
         return {
