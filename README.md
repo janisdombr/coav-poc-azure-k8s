@@ -27,14 +27,17 @@ _(URL printed by `terraform output demo_url` after cloud deployment)_
 - Zone Alpha: lat 50.20–51.00, lon 3.80–5.40, FL330–FL380 (Brussels convergence)
 - Zone Bravo: lat 51.30–52.50, lon 5.80–8.20, FL310–FL370 (Dutch-German border)
 
-**Alert states (enriched in `FlightStateStore.enrichAlert()`):**
+**Alert states — pure ISSR geometry (enriched in `FlightStateStore.enrichAlert()`):**
 
 | State | Condition |
 |---|---|
-| `CRITICAL` | Flight is currently inside ISSR zone |
-| `APPROACHING` | Trajectory projection shows entry within 20 min |
-| `WARNING` | Contrail detected, not yet in/approaching ISSR |
+| `CRITICAL` | Flight is currently inside an ISSR zone |
+| `APPROACHING` | Trajectory projection (20×1-min steps) shows entry within 20 min |
 | `null` | Normal |
+
+> Alerts depend **only** on flight geometry vs ISSR zones — never on the camera
+> `contrail_detected` flag. Ground-camera detection is a **decoupled verification channel**
+> (see *Camera verification* below), not an alert trigger.
 
 Full architecture: PoC vs Production comparison, data flow diagram, alert state machine →
 [ARCHITECTURE.md](ARCHITECTURE.md)
@@ -230,7 +233,7 @@ curl http://localhost:8080/api/flights
 
 Full command reference → [coav-gui/backend/README.md](coav-gui/backend/README.md)
 
-## Run backend tests (44 tests, no Maven install needed)
+## Run backend tests (104 tests, no Maven install needed)
 
 ```sh
 docker run --rm -v "$PWD/coav-gui/backend":/build -w /build \
@@ -288,11 +291,20 @@ Share this HTTPS URL. The frontend proxies `/api` and `/ws` to the backend autom
 
 ## Update after code changes
 
-Force a full rebuild (all 3 images):
+Force a full rebuild (all 3 images) and roll the Container Apps:
 
 ```sh
-terraform apply -replace=null_resource.build_and_push
+terraform apply -replace=null_resource.build_images
 ```
+
+`null_resource.build_images` rebuilds + pushes all three images; `null_resource.update_apps`
+then runs automatically (it triggers on the new build ID) and updates both Container Apps with
+a fresh `DEPLOY_TIME` env var so they pull the new `:latest`. The ACI emulator is restarted
+separately (see below) or via CD.
+
+> **Note:** for routine code changes you normally don't run this by hand — the GitHub Actions
+> **CD pipeline** builds and deploys only the changed component on every push to `main`
+> (see *CI/CD* below).
 
 Or rebuild a single image manually:
 
@@ -369,14 +381,89 @@ cd terraform && terraform destroy -auto-approve
 
 ---
 
+# CI/CD (GitHub Actions)
+
+Two workflows in `.github/workflows/` run on every push / PR to `main`. Both are
+**path-filtered** — only the components you actually changed are built and tested, so a
+docs-only or single-service change stays fast. Doc/image-only pushes (`**.md`, `images/**`)
+skip both pipelines entirely.
+
+## CI — `ci.yml` (test gate)
+
+Runs on push **and** pull requests to `main`. A `changes` job (`dorny/paths-filter`) decides
+which downstream jobs run:
+
+| Job | Runs when | What it does |
+|---|---|---|
+| `backend-tests` | `coav-gui/backend/**` | 104 JUnit tests via the Maven Docker image (no local JDK needed) |
+| `frontend-build` | `coav-gui/frontend/**` | `npm ci` → type-check + `npm run build` → unit tests; also greps for forbidden relative `fetch('/api…')` calls (prod uses `window.BACKEND_URL`) |
+| `edge-pi-tests` | `edge-pi/**` | pytest `test_inference.py` + `test_capture.py` (opencv + pydantic only, **no torch**) |
+| `emulator-tests` | `edge-emulator/**` | pytest `test_emulator.py` |
+| `playwright-e2e` | frontend or backend changed | Boots backend in `mock` mode (Docker), runs Playwright Chromium E2E; uploads the report artifact on failure |
+| `k6-smoke` | `k6/**` or backend changed | Boots mock backend, runs `k6/smoke.js` API smoke tests |
+
+`ci.yml` also exposes `workflow_call`, so the CD pipeline can invoke it as a gate (in that
+mode all filters are forced `true` — the full suite runs before any deploy).
+
+## CD — `cd.yml` (deploy to Azure)
+
+Runs on push to `main` only. Steps:
+
+1. **`ci`** — calls `ci.yml` via `workflow_call` (full suite) as a green gate.
+2. **`changes`** — re-computes the *real* diff (backend / frontend / emulator).
+3. **`deploy`** — gated on the `production` GitHub Environment (add a required reviewer there
+   for manual approval). For each changed component only: `docker build` → push to ACR
+   (`acrcoavpoc`) → `az containerapp update` with a fresh `DEPLOY_TIME` (backend/frontend, with
+   3× retry) or `az container restart` (ACI emulator). A `concurrency` group serialises
+   deploys so two never overlap.
+
+### One-time setup for CD
+
+CD authenticates to Azure with a service principal stored as a repo secret.
+
+```sh
+# Create an SP scoped to the resource group and capture the JSON
+az ad sp create-for-rbac \
+  --name coav-github-cd \
+  --role contributor \
+  --scopes /subscriptions/<SUB_ID>/resourceGroups/rg-coav-poc-prod \
+  --sdk-auth
+```
+
+- Save the full JSON output as the GitHub repo secret **`AZURE_CREDENTIALS`**
+  (Settings → Secrets and variables → Actions).
+- Create a GitHub **Environment** named `production` (Settings → Environments). Add a
+  required reviewer if you want manual approval before each deploy.
+- The SP needs `AcrPush` + `Contributor` on the resource group (the command above covers both
+  via `contributor`).
+
+> The pipeline pushes to ACR and updates the *existing* Container Apps / ACI created by
+> `terraform/app`. It does **not** run Terraform — infrastructure changes are still applied
+> manually with `terraform apply`. CD only ships new container images.
+
+---
+
 ## API reference
 
 ### Flight data
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/flights` | Active flights (5-min TTL, sorted newest first). Each flight includes `alert` (`CRITICAL` / `APPROACHING` / `WARNING` / null), `heading` (degrees), `approachingZoneId`, `approachingMinutes`. |
+| GET | `/api/flights` | Active flights (5-min TTL, sorted newest first). Each flight includes `alert` (`CRITICAL` / `APPROACHING` / null — pure ISSR geometry), `heading` (degrees), `approachingZoneId`, `approachingMinutes`. |
 | GET | `/api/issr-zones` | ISSR zone definitions (ALPHA + BRAVO) with lat/lon/alt bounds and severity. |
+
+### Camera verification (decoupled ground channel)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/cameras` | The 4 all-sky ground cameras (`id`, `lat`, `lon`, `elevationCutoffDeg`). Static config. |
+| GET | `/api/camera-verification` | Latest per-camera U-Net detection state (5-min TTL): `confidence`, `contrailPixelRatio`, `contrailCount`, `newContrailCount`, `frameRef`, downscaled `maskPngB64`. |
+
+Camera messages are **camera-keyed** (`EDGE_VISION_AI` carries `camera_id`, **not** `flight_id`).
+There is **no camera→flight binding on the backend** — FOV intersection (which camera can see an
+alerting flight) is computed on the frontend for map highlighting. Physically the data is one
+EHBK GVCCS camera (Brétigny, CC BY 4.0) time-sliced across 4 notional positions — an
+illustration of the planned network, honestly labelled in the UI.
 
 ### 3-tier ATC workflow
 
@@ -391,6 +478,7 @@ cd terraform && terraform destroy -auto-approve
 - `/topic/flights` — full flight list, pushed every 2 s by `FlightStateStore`
 - `/topic/advisories` — pending advisory list, pushed on any change
 - `/topic/corrections` — correction acknowledgement after ATCO action
+- `/topic/cameras` — per-camera verification state, pushed by `CameraStore` on update
 
 **Advisory flow:** `FlightStateStore.enrichAlert()` runs flat-earth trajectory projection (20 one-minute steps). On `APPROACHING`, `AdvisoryService` auto-generates one advisory per flight with recommended FL±2000ft. FDO accepts or rejects; accepted advisories enable the ATCO correction form. Rejected flights are suppressed for 5 min. Advisory does **not** modify simulator trajectory (PoC scope).
 
@@ -405,10 +493,11 @@ Two message types filtered in Java by the `message_type` JSON field:
 
 | `message_type` | Source | Consumed by |
 |---|---|---|
-| `ADSB_TELEMETRY` | emulator.py / edge-pi | EventHubListenerService → ADSB state map |
-| `EDGE_VISION_AI` | emulator.py / edge-pi | EventHubListenerService → AI state map |
+| `ADSB_TELEMETRY` | emulator.py / edge-pi | EventHubListenerService → ADSB state map (flight-keyed) |
+| `EDGE_VISION_AI` | emulator.py / edge-pi | EventHubListenerService → `CameraStore` (camera-keyed, `camera_id`) |
 
-Stream join fires when both types arrive for the same `flight_id`.
+`ADSB_TELEMETRY` drives flights (keyed by `flight_id`); `EDGE_VISION_AI` drives the decoupled
+camera verification channel (keyed by `camera_id`, no `flight_id`).
 EventHubListenerService starts from events enqueued within the last **15 minutes** to skip stale
 historical data (`EventPosition.fromEnqueuedTime(now - 15 min)`).
 
@@ -418,6 +507,9 @@ historical data (`EventPosition.fromEnqueuedTime(now - 15 min)`).
 
 ```
 coav-poc-azure-k8s/
+├── .github/workflows/
+│   ├── ci.yml                       — path-filtered test gate (Maven / Vue / pytest / Playwright / k6)
+│   └── cd.yml                       — build + push changed images, roll Azure Container Apps / ACI
 ├── terraform/
 │   ├── main.tf / variables.tf       — Event Hub, Databricks, Storage
 │   ├── databricks/                  — Databricks workspace + job
@@ -436,7 +528,7 @@ coav-poc-azure-k8s/
 │   └── main.py                      — Python K8s backend v1 (initial prototype; superseded by
 │                                      coav-gui/backend once the Java requirement was found in the spec)
 ├── coav-gui/
-│   ├── backend/                     — Java Spring Boot 3 (44 tests, mock + EventHub modes)
+│   ├── backend/                     — Java Spring Boot 3 (104 tests, mock + EventHub modes)
 │   └── frontend/                    — Vue 3 + Vite + TypeScript
 │       ├── Dockerfile               — nginx multi-stage, BACKEND_URL injected at runtime
 │       └── nginx.conf               — serves /config.js with backend URL for direct browser calls
