@@ -2,6 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Unbuffered stdout/stderr so `az container logs` streams output in real time.
+# Without this, Python block-buffers stdout in a container and logs look empty
+# even while the process is running — which blinds startup/hang diagnosis.
+ENV PYTHONUNBUFFERED=1
+
 # libglib2.0-0 is required by opencv-python-headless at import time
 RUN apt-get update && apt-get install -y --no-install-recommends libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
