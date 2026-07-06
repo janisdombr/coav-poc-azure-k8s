@@ -59,6 +59,13 @@ public class IssrZoneService {
     // Pre-tactical planning horizon: ISSR zones 5 h ahead (index into hourly[] array)
     private static final int    FORECAST_HOUR    = 5;
 
+    // Cap on zone extent so a widespread-ISSR forecast still produces compact,
+    // "patchy" zones (as on the Showcase slides) instead of one blob covering the
+    // whole FIR. Zone is centred on the cluster's peak-RHi point, then intersected
+    // with the raw cluster bounding box (never exceeds either).
+    private static final double MAX_ZONE_LAT_SPAN = 1.2;
+    private static final double MAX_ZONE_LON_SPAN = 1.8;
+
     private final HttpClient http = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build();
@@ -149,7 +156,8 @@ public class IssrZoneService {
 
     // ── Clustering ────────────────────────────────────────────────────────────────
 
-    private List<IssrZone> clusterToZones(List<GridPoint> grid) {
+    // Package-private (not private) so tests can exercise clustering/capping directly.
+    List<IssrZone> clusterToZones(List<GridPoint> grid) {
         List<GridPoint> issr = grid.stream().filter(p -> p.rhi() > RHI_THRESHOLD).toList();
         if (issr.isEmpty()) return List.of();
 
@@ -193,13 +201,30 @@ public class IssrZoneService {
                 double maxLon = cluster.stream().mapToDouble(GridPoint::lon).max().orElse(0);
                 char   letter = (char) ('A' + zoneIdx - 1);
 
+                // Raw cluster bounding box (grid cell padding included), same as before capping.
+                double rawMinLat = minLat - latStep / 2;
+                double rawMaxLat = maxLat + latStep / 2;
+                double rawMinLon = minLon - lonStep / 2;
+                double rawMaxLon = maxLon + lonStep / 2;
+
+                // Peak-RHi point anchors the cap so the zone tracks the actual ISSR core
+                // rather than an arbitrary corner of the raw box.
+                GridPoint peak = cluster.stream()
+                    .max((a, b) -> Double.compare(a.rhi(), b.rhi()))
+                    .orElseThrow();
+
+                double zMinLat = Math.max(rawMinLat, peak.lat() - MAX_ZONE_LAT_SPAN / 2);
+                double zMaxLat = Math.min(rawMaxLat, peak.lat() + MAX_ZONE_LAT_SPAN / 2);
+                double zMinLon = Math.max(rawMinLon, peak.lon() - MAX_ZONE_LON_SPAN / 2);
+                double zMaxLon = Math.min(rawMaxLon, peak.lon() + MAX_ZONE_LON_SPAN / 2);
+
                 zones.add(IssrZone.builder()
                     .id("Dynamic-" + letter)
                     .label(String.format("Dynamic Zone %c (RHi %.0f%%)", letter, maxRhi))
-                    .minLat(round2(minLat - latStep / 2))
-                    .maxLat(round2(maxLat + latStep / 2))
-                    .minLon(round2(minLon - lonStep / 2))
-                    .maxLon(round2(maxLon + lonStep / 2))
+                    .minLat(round2(zMinLat))
+                    .maxLat(round2(zMaxLat))
+                    .minLon(round2(zMinLon))
+                    .maxLon(round2(zMaxLon))
                     .minAlt(altFt - 2_000)
                     .maxAlt(altFt + 2_000)
                     .severity("CRITICAL")
@@ -211,6 +236,7 @@ public class IssrZoneService {
 
     private static double round2(double v) { return Math.round(v * 100.0) / 100.0; }
 
-    private record GridPoint(double lat, double lon, String level, int altFt,
+    // Package-private (not private) so tests can construct grid points directly.
+    record GridPoint(double lat, double lon, String level, int altFt,
                              double tempC, double rhw, double rhi) {}
 }

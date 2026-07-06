@@ -83,6 +83,20 @@ FALLBACK_ZONES: list[dict] = [
 ]
 
 
+def _zone_signature(zones: list[dict]) -> tuple:
+    """
+    Geometry fingerprint of the zone set. Used to decide whether routes must be
+    recomputed: reinit only fires when the geometry actually changed, not on every
+    30-min refresh that returns the same zones.
+    """
+    return tuple(sorted(
+        (z.get("id"), round(z.get("minLat", 0), 2), round(z.get("maxLat", 0), 2),
+         round(z.get("minLon", 0), 2), round(z.get("maxLon", 0), 2),
+         z.get("minAlt"), z.get("maxAlt"))
+        for z in zones
+    ))
+
+
 def fetch_issr_zones(retries: int = 3, delay: int = 5) -> list[dict]:
     """Fetch current ISSR zones from backend REST API with retry."""
     url = f"{BACKEND_URL}/api/issr-zones"
@@ -816,17 +830,17 @@ def main():
                 if time.time() - last_zone_refresh > ZONE_REFRESH_S:
                     new_zones = fetch_issr_zones()
                     new_ids   = {z["id"] for z in new_zones}
-                    if on_fallback and not new_ids.issubset(_fallback_ids):
-                        # Zones upgraded fallback → dynamic: reinitialise routes so
-                        # flight positions, holds, and departure/arrival all match the
-                        # real ISSR area instead of the Alpha/Bravo placeholders.
-                        print("[Emulator] Zones upgraded fallback → dynamic — reinitialising")
+                    # Reinitialise routes whenever the zone GEOMETRY changes — not only on the
+                    # first fallback→dynamic upgrade. This lets a running emulator self-heal when
+                    # IssrZoneService publishes new/reshaped zones (backend redeploy, or a 30-min
+                    # Open-Meteo shift) so routes track the real ISSR area — NO manual container
+                    # restart needed.
+                    if _zone_signature(new_zones) != _zone_signature(zones_cache):
+                        print(f"[Emulator] Zone geometry changed → reinitialising routes "
+                              f"({sorted(new_ids)})")
                         zones_cache = new_zones
                         init_simulation(zones_cache)
-                        on_fallback = False
-                    else:
-                        zones_cache = new_zones
-                        on_fallback = new_ids.issubset(_fallback_ids)
+                    on_fallback = new_ids.issubset(_fallback_ids)
                     last_zone_refresh = time.time()
 
                 adsb_payloads   = build_payloads()
