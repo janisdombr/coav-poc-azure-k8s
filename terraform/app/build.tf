@@ -88,9 +88,31 @@ resource "azurerm_container_group" "emulator" {
     environment_variables = {
       CONN_STR = "${data.azurerm_eventhub_namespace_authorization_rule.root.primary_connection_string};EntityPath=${var.eventhub_name}"
       # Without this the emulator defaults to http://localhost:8080 → cannot fetch
-      # /api/issr-zones → blocks 15 min in wait_for_dynamic_zones, then flies stale
-      # Alpha/Bravo routes that don't match the live dynamic zones.
+      # /api/issr-zones on startup and flies stale Alpha/Bravo routes that don't
+      # match the live dynamic zones (it upgrades automatically within ~60s once
+      # BACKEND_URL is reachable — see emulator.py main()'s adaptive refresh).
       BACKEND_URL = "https://${azurerm_container_app.backend.ingress[0].fqdn}"
+    }
+
+    ports {
+      port     = 8081
+      protocol = "TCP"
+    }
+
+    # Readiness-by-data probe (Option A): the emulator's /health endpoint only
+    # returns 200 if it actually sent a telemetry batch within the last 15s
+    # (see HEALTH_FRESH_S in emulator.py) — not just "process is running". If
+    # the emulator hangs (e.g. stuck Event Hub call) it starts returning 503
+    # and ACI restarts the container automatically, instead of silently sitting
+    # in "Running" state while producing nothing.
+    liveness_probe {
+      http_get {
+        path = "/health"
+        port = 8081
+      }
+      initial_delay_seconds = 40
+      period_seconds        = 30
+      failure_threshold     = 3
     }
   }
 

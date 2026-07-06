@@ -1,4 +1,5 @@
 import base64
+import threading
 import time
 import datetime
 import os
@@ -7,6 +8,7 @@ import math
 import random
 import json as json_lib
 import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
@@ -66,9 +68,21 @@ MODEL_BY_TYPE: dict[str, type[BaseModel]] = {
 
 # ── ISSR zone management — single source of truth from backend API ─────────────
 
-BACKEND_URL    = os.getenv("BACKEND_URL", "http://localhost:8080")
-ZONE_REFRESH_S = 30 * 60   # re-fetch every 30 min (matches IssrZoneService)
-TICK_S         = 3          # seconds per simulation tick
+BACKEND_URL     = os.getenv("BACKEND_URL", "http://localhost:8080")
+ZONE_REFRESH_S  = 30 * 60   # normal re-fetch cadence once on dynamic zones (matches IssrZoneService)
+FALLBACK_POLL_S = 60        # tighter re-fetch cadence while still on Alpha/Bravo fallback —
+                             # IssrZoneService typically publishes dynamic zones ~60s after backend start
+TICK_S          = 3          # seconds per simulation tick
+
+# ── Health endpoint (Option A: readiness by DATA, not liveness) ────────────────
+# ACI only knows "container is Running" — it has no idea whether the emulator is
+# actually still producing telemetry. This tiny /health endpoint reports 200 only
+# if a batch was successfully sent recently; 503 otherwise. Wired to an ACI
+# liveness_probe (terraform/app/build.tf) so a stuck-but-running emulator gets
+# restarted automatically.
+HEALTH_PORT       = 8081
+HEALTH_FRESH_S     = 15   # must have sent within this many seconds to be considered healthy
+LAST_SEND_TS       = 0.0  # module-level, updated right after producer.send_batch() succeeds
 
 # Maastricht Aachen Airport (EHBK) — real location of MUAC contrail cameras
 MAASTRICHT_LAT = 50.911
@@ -81,6 +95,55 @@ FALLBACK_ZONES: list[dict] = [
     {"id": "BRAVO", "minLat": 51.30, "maxLat": 52.50,
      "minLon": 5.80, "maxLon": 8.20, "minAlt": 31000, "maxAlt": 37000},
 ]
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """
+    GET /health → 200 if a batch was sent within HEALTH_FRESH_S seconds, else 503.
+    This is readiness-by-data, not liveness — a hung-but-running process (e.g.
+    stuck on an Event Hub call) will start returning 503 and the ACI liveness_probe
+    (terraform/app/build.tf) will restart the container.
+    """
+
+    def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler API
+        if self.path != "/health":
+            self.send_response(404)
+            self.end_headers()
+            return
+        age = time.time() - LAST_SEND_TS
+        ok = age < HEALTH_FRESH_S
+        body = json_lib.dumps({
+            "ok": ok,
+            "last_send_age_s": round(age, 1),
+            "tick": tick,
+        }).encode()
+        self.send_response(200 if ok else 503)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):  # noqa: A003 — silence default access log
+        pass
+
+
+def start_health_server(port: int = HEALTH_PORT) -> HTTPServer | None:
+    """
+    Starts the /health HTTP server on a daemon thread. Never raises — if the
+    port is unavailable (e.g. already bound in a test), the emulator logs and
+    keeps running without a health endpoint rather than crashing the ADS-B loop.
+    Must be called from main(), NOT at import time — tests import this module
+    and must not have a socket opened as a side effect.
+    """
+    try:
+        server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    except OSError as exc:
+        print(f"[Emulator] Could not start /health server on port {port}: {exc}")
+        return None
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"[Emulator] /health server listening on :{port}")
+    return server
 
 
 def _zone_signature(zones: list[dict]) -> tuple:
@@ -119,6 +182,12 @@ def fetch_issr_zones(retries: int = 3, delay: int = 5) -> list[dict]:
 
 def wait_for_dynamic_zones() -> list[dict]:
     """
+    UNUSED by main() as of Option A (non-blocking start) — kept for reference /
+    manual debugging only. main() now uses a single fetch_issr_zones() call and
+    an adaptive re-poll in the send loop (FALLBACK_POLL_S while on fallback,
+    ZONE_REFRESH_S once dynamic) instead of blocking up to 15 min here before
+    the first telemetry is sent.
+
     Poll backend until IssrZoneService has replaced the Alpha/Bravo startup
     fallback with real Open-Meteo zones (initial delay ≈ 60 s in Java).
     Also handles ACI cold-start where backend is not yet reachable.
@@ -170,51 +239,80 @@ def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def compute_simulation(zones: list[dict]) -> dict:
     """
-    Derive simulation parameters from zone geometry so that all three
-    geometry-only alert states are always visible:
+    Derive simulation parameters PER ZONE — not from one merged bounding box —
+    so that geographically separated zones (e.g. a northern + a southern
+    dynamic ISSR zone from IssrZoneService/Open-Meteo) each get their own
+    holds and transit traffic. A shared-bbox center/BUF can fall in the GAP
+    between two distant zones and leave BOTH zones without any hold/transit
+    passing through them (bug found by simulation: 0% CRITICAL, ~9% APPROACHING
+    for a north/south zone split — every route/hold missed both zones).
 
-      CRITICAL   — holding stacks orbit inside the zone
-      APPROACHING — transit routes 0–2 enter the zone from outside (start
-                    at least 2.2° lat/lon clear of the boundary)
-      null       — transit routes 0–2 after they exit the far side, and
-                   route 3 which flies above the zone ceiling (never enters).
+      CRITICAL    — one holding stack orbits inside EVERY zone (round-robin:
+                    hold h → zones[h % N] — guarantees a hold per zone)
+      APPROACHING — each transit route enters ITS OWN assigned zone from
+                    outside (BUF computed against THAT zone's bbox, not a
+                    global one). Routes are assigned zones round-robin
+                    (route i → zones[i % N]), so with N=2 zones get 2 routes
+                    each; with N=1 all 4 routes/both holds use that one zone
+                    (identical to the pre-fix single-zone behaviour).
+      null        — transit routes after they exit their zone's far side, and
+                    route 3 (the "above ceiling" pattern) which flies above
+                    ITS OWN assigned zone's ceiling — never enters by
+                    altitude, regardless of which zone it geometrically sits
+                    over.
 
     Alerts are geometry-only (P1): contrail detection no longer drives alert
     state — that is the decoupled camera verification channel.
     """
-    ml = min(z["minLat"] for z in zones);  xl = max(z["maxLat"] for z in zones)
-    mn = min(z["minLon"] for z in zones);  xn = max(z["maxLon"] for z in zones)
-    ma = min(z["minAlt"] for z in zones);  xa = max(z["maxAlt"] for z in zones)
+    n = len(zones)
 
-    clat     = (ml + xl) / 2
-    clon     = (mn + xn) / 2
-    mid_alt  = int((ma + xa) / 2)          # e.g. FL340 for FL320–360
-    over_alt = xa + 3000                    # above ceiling → no alert (outside zone alt range)
+    def zone_center(z: dict) -> tuple[float, float]:
+        return (z["minLat"] + z["maxLat"]) / 2, (z["minLon"] + z["maxLon"]) / 2
+
+    def zone_mid_alt(z: dict) -> int:
+        return int((z["minAlt"] + z["maxAlt"]) / 2)   # e.g. FL340 for FL320–360
 
     # Approach buffer: 2.2° guarantees > 8 min APPROACHING phase before zone entry
     BUF = 2.2
 
-    # (startLat, startLon, endLat, endLon) — stagger initial progress so all
-    # four phases (outside → APPROACHING → CRITICAL → exited) are visible from
-    # the first tick
-    routes = [
-        # 0  East → West at zone cruise alt  [APPROACHING then CRITICAL then null]
-        (round(clat + 0.4, 2), round(xn + BUF, 2),
-         round(clat - 0.4, 2), round(mn - 1.5, 2)),
-        # 1  South → North at zone cruise alt [APPROACHING then CRITICAL then null]
-        (round(ml - BUF, 2),   round(clon + 0.2, 2),
-         round(xl + 1.5, 2),   round(clon - 0.2, 2)),
-        # 2  North-East → South-West          [APPROACHING then CRITICAL then null]
-        (round(xl + 1.2, 2),   round(xn + 1.2, 2),
-         round(ml - 1.0, 2),   round(mn - 1.0, 2)),
-        # 3  East → West ABOVE zone ceiling    [above ceiling — no alert, never enters zone]
-        (round(clat + 1.2, 2), round(xn + 2.5, 2),
-         round(clat - 1.2, 2), round(mn - 1.5, 2)),
-    ]
+    # (startLat, startLon, endLat, endLon) per route, each built from ITS OWN
+    # assigned zone — stagger initial progress so all four phases
+    # (outside → APPROACHING → CRITICAL → exited) are visible from the first
+    # tick. Round-robin zone assignment (i % n) is what fixes the "gap
+    # between distant zones" bug.
+    routes: list[tuple] = []
+    altitudes: list[int] = []
+    speeds = [460, 450, 475, 465]
 
-    altitudes = [mid_alt, mid_alt, mid_alt + 1000, over_alt]
-    speeds    = [460, 450, 475, 465]
-    headings  = [_bearing(*r) for r in routes]
+    for i in range(4):
+        z = zones[i % n]
+        z_clat, z_clon = zone_center(z)
+        z_mid_alt = zone_mid_alt(z)
+
+        if i % 4 == 0:
+            # East → West at zone cruise alt  [APPROACHING then CRITICAL then null]
+            routes.append((round(z_clat + 0.4, 2), round(z["maxLon"] + BUF, 2),
+                            round(z_clat - 0.4, 2), round(z["minLon"] - 1.5, 2)))
+            altitudes.append(z_mid_alt)
+        elif i % 4 == 1:
+            # South → North at zone cruise alt [APPROACHING then CRITICAL then null]
+            routes.append((round(z["minLat"] - BUF, 2), round(z_clon + 0.2, 2),
+                            round(z["maxLat"] + 1.5, 2), round(z_clon - 0.2, 2)))
+            altitudes.append(z_mid_alt)
+        elif i % 4 == 2:
+            # North-East → South-West          [APPROACHING then CRITICAL then null]
+            routes.append((round(z["maxLat"] + 1.2, 2), round(z["maxLon"] + 1.2, 2),
+                            round(z["minLat"] - 1.0, 2), round(z["minLon"] - 1.0, 2)))
+            altitudes.append(z_mid_alt + 1000)
+        else:
+            # East → West ABOVE this zone's ceiling — never enters (altitude
+            # clearance is relative to the assigned zone's OWN ceiling, so it
+            # stays a reliable "null" route no matter which zone it sits over)
+            routes.append((round(z_clat + 1.2, 2), round(z["maxLon"] + 2.5, 2),
+                            round(z_clat - 1.2, 2), round(z["minLon"] - 1.5, 2)))
+            altitudes.append(z["maxAlt"] + 3000)
+
+    headings = [_bearing(*r) for r in routes]
 
     def route_ticks(i: int) -> int:
         s_lat, s_lon, e_lat, e_lon = routes[i]
@@ -238,20 +336,43 @@ def compute_simulation(zones: list[dict]) -> dict:
         [934, 381, 475, 992, 598],
     ]
 
-    # Holding stacks — orbit inside zone → always CRITICAL
-    holds = [
-        (round(clat - 0.4, 2), round(clon - 0.5, 2), 0.12, 0.18),
-        (round(clat + 0.5, 2), round(clon + 0.5, 2), 0.10, 0.15),
-    ]
-    hold_alts = [mid_alt, mid_alt - 1000]
+    # Holding stacks — round-robin one orbit per zone → always CRITICAL in
+    # EVERY zone, even when zones are geographically separated. With N=1 both
+    # holds land in the same (only) zone, at their usual two distinct offsets
+    # — identical to the pre-fix behaviour.
+    HOLD_OFFSETS = [(-0.4, -0.5, 0.12, 0.18), (0.5, 0.5, 0.10, 0.15)]
+    holds: list[tuple] = []
+    hold_alts: list[int] = []
+    for h in range(2):
+        z = zones[h % n]
+        z_clat, z_clon = zone_center(z)
+        dlat, dlon, r_lat, r_lon = HOLD_OFFSETS[h]
+        holds.append((round(z_clat + dlat, 2), round(z_clon + dlon, 2), r_lat, r_lon))
+        hold_alts.append(zone_mid_alt(z) - (0 if h == 0 else 1000))
 
-    # Departure: climbs from Maastricht Aachen Airport (EHBK) northward into zone
+    # Departure/arrival target the zone geographically NEAREST to Maastricht
+    # (nm-scaled distance, not a global bbox) so a far-away zone doesn't pull
+    # the climb/descent profile toward a zone Maastricht traffic would never
+    # actually route through.
+    def _nm_dist_to_maastricht(z: dict) -> float:
+        c_lat, c_lon = zone_center(z)
+        dlat_nm = (MAASTRICHT_LAT - c_lat) * 60
+        dlon_nm = (MAASTRICHT_LON - c_lon) * 60 * math.cos(
+            math.radians((MAASTRICHT_LAT + c_lat) / 2))
+        return math.hypot(dlat_nm, dlon_nm)
+
+    near = min(zones, key=_nm_dist_to_maastricht)
+    near_clat, near_clon = zone_center(near)
+    near_xl = near["maxLat"]
+    mid_alt = zone_mid_alt(near)   # dep/arr cruise altitude reference
+
+    # Departure: climbs from Maastricht Aachen Airport (EHBK) into the nearest zone
     dep_start = (MAASTRICHT_LAT, MAASTRICHT_LON)
-    dep_end   = (round(xl + 0.5, 2), round(clon + 0.3, 2))
+    dep_end   = (round(near_xl + 0.5, 2), round(near_clon + 0.3, 2))
     dep_hdg   = _bearing(dep_start[0], dep_start[1], dep_end[0], dep_end[1])
 
-    # Arrival: descends from north of zone to Maastricht Aachen Airport (EHBK)
-    arr_start = (round(xl + 0.5, 2), round(clon - 0.2, 2))
+    # Arrival: descends from the nearest zone to Maastricht Aachen Airport (EHBK)
+    arr_start = (round(near_xl + 0.5, 2), round(near_clon - 0.2, 2))
     arr_end   = (MAASTRICHT_LAT, MAASTRICHT_LON)
     arr_hdg   = _bearing(arr_start[0], arr_start[1], arr_end[0], arr_end[1])
 
@@ -797,18 +918,23 @@ class CameraProducer:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    global zones_cache, last_zone_refresh
+    global zones_cache, last_zone_refresh, LAST_SEND_TS
 
     conn_str = os.getenv("CONN_STR")
     if not conn_str:
         print("Error: CONN_STR environment variable is not set.")
         return
 
-    # Wait up to ~5 min for IssrZoneService to publish dynamic zones (initial delay ≈ 60 s).
-    # If IssrZoneService's first run finds no ISSR conditions, backend stays on Alpha/Bravo
-    # and the emulator falls back to those zones — but will auto-reinitialise when Dynamic
-    # zones arrive in the next 30-min IssrZoneService cycle (see re-init logic below).
-    zones_cache = wait_for_dynamic_zones()
+    start_health_server()
+
+    # Option A — non-blocking start: one quick fetch_issr_zones() (short retries,
+    # falls back to Alpha/Bravo on failure) instead of blocking up to 15 min in
+    # wait_for_dynamic_zones(). First telemetry goes out within ~15-20 s of
+    # container start. If we land on fallback, the main loop below polls every
+    # FALLBACK_POLL_S (~60 s) — matching IssrZoneService's ~60 s initial publish
+    # delay — until dynamic zones arrive, then drops back to the normal
+    # ZONE_REFRESH_S (30 min) cadence.
+    zones_cache = fetch_issr_zones()
     last_zone_refresh = time.time()
 
     _fallback_ids = {"ALPHA", "BRAVO"}
@@ -827,7 +953,8 @@ def main():
     try:
         with producer:
             while True:
-                if time.time() - last_zone_refresh > ZONE_REFRESH_S:
+                refresh_due_s = FALLBACK_POLL_S if on_fallback else ZONE_REFRESH_S
+                if time.time() - last_zone_refresh > refresh_due_s:
                     new_zones = fetch_issr_zones()
                     new_ids   = {z["id"] for z in new_zones}
                     # Reinitialise routes whenever the zone GEOMETRY changes — not only on the
@@ -862,6 +989,7 @@ def main():
                                   f"contrails={raw['contrail_count']} "
                                   f"(new {raw['new_contrail_count']})")
                     producer.send_batch(batch)
+                    LAST_SEND_TS = time.time()
                     print(f"  --- tick={tick} aircraft={len(adsb_payloads)} "
                           f"cameras={len(camera_payloads)} ---")
                 except ValidationError as ve:
