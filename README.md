@@ -89,20 +89,26 @@ simulator, so no Event Hub or credentials are required. ISSR zones are still liv
 > Use **Docker Desktop**, not the minikube Docker context. If you previously ran
 > `eval $(minikube docker-env)`, reset it first: `eval $(minikube docker-env -u)`
 
+**1. Backend** — build once, then run in mock mode:
+
 ```sh
-# 1. Backend — build once, run in mock mode
 docker build -t coav-gui-backend:v1 ./coav-gui/backend
 docker run -d -p 8080:8080 -e SPRING_PROFILES_ACTIVE=mock --name coav-backend coav-gui-backend:v1
-
 curl http://localhost:8080/api/flights
 curl http://localhost:8080/api/issr-zones
+```
 
-# 2. Frontend — Vite dev server (proxies /api and /ws → :8080)
+**2. Frontend** — Vite dev server on `http://localhost:5173`, proxying `/api` and `/ws` to `:8080`. `npm install` is only needed the first time.
+
+```sh
 cd coav-gui/frontend
-npm install          # once
-npm run dev          # → http://localhost:5173
+npm install
+npm run dev
+```
 
-# Stop the backend when done
+Stop the backend when done:
+
+```sh
 docker stop coav-backend && docker rm coav-backend
 ```
 
@@ -113,15 +119,17 @@ docker stop coav-backend && docker rm coav-backend
 Runs the real edge→cloud data path: the emulator publishes ADS-B + camera telemetry to Event
 Hub, and the backend consumes it live.
 
+Prerequisites — terraform, python3, azure-cli:
+
 ```sh
-# Prerequisites: terraform, python3, azure-cli
 brew install terraform python azure-cli
 cd edge-emulator && pip3 install -r requirements.txt && cd ..
 az login
 ```
 
+**1. Provision test infrastructure** (Event Hub, Storage, Databricks workspace):
+
 ```sh
-# 1. Provision test infrastructure (Event Hub, Storage, Databricks workspace)
 cd terraform
 terraform init
 terraform apply
@@ -129,25 +137,26 @@ export CONN_STR=$(terraform output -raw eventhub_connection_string)
 ```
 <img src="images/tf-apply.png" width="544" />
 
+**2. Start the emulator** — 7 aircraft: 4 transit corridors (BAW/DLH/KLM/AFR), 2 holding stacks (BEL256 Brussels DENUT / KLM892 Amsterdam SUGOL), 1 departure (TUI6KL). Each transit flight keeps its callsign for the full crossing — no synchronized resets.
+
 ```sh
-# 2. Start the emulator — 7 aircraft: 4 transit corridors (BAW/DLH/KLM/AFR),
-#    2 holding stacks (BEL256 Brussels DENUT / KLM892 Amsterdam SUGOL), 1 departure (TUI6KL).
-#    Each transit flight keeps its callsign for the full crossing — no synchronized resets.
 cd ../edge-emulator
 python3 emulator.py
 ```
 <img src="images/emulating.png" width="644" />
 
+**3. Backend in Azure mode** — consumes live Event Hub data (skip the `build` if you already built the image above):
+
 ```sh
-# 3. Backend in Azure mode — consumes live Event Hub data
-docker build -t coav-gui-backend:v1 ./coav-gui/backend   # if not built already
+docker build -t coav-gui-backend:v1 ./coav-gui/backend
 docker run -d -p 8080:8080 -e CONN_STR="$CONN_STR" --name coav-backend coav-gui-backend:v1
 curl http://localhost:8080/api/flights
 docker stop coav-backend && docker rm coav-backend
 ```
 
+Destroy the stack when done to save money:
+
 ```sh
-# Destroy the stack when done to save money
 cd ../terraform && terraform destroy -auto-approve
 ```
 <img src="images/tf-destroy.png" width="457" />
@@ -156,18 +165,28 @@ cd ../terraform && terraform destroy -auto-approve
 
 All of these run automatically in CI (`.github/workflows/ci.yml`, path-filtered).
 
+Backend — 104 JUnit tests (Maven runs inside Docker; no local JDK needed):
+
 ```sh
-# Backend — 104 JUnit tests (Maven runs inside Docker; no local JDK needed)
 docker run --rm -v "$PWD/coav-gui/backend":/build -w /build \
   maven:3.9-eclipse-temurin-21-alpine mvn test
+```
 
-# Emulator — 24 tests (incl. OWASP input validation)
+Emulator — 24 tests (incl. OWASP input validation):
+
+```sh
 cd edge-emulator && python3 -m pytest test_emulator.py -v && cd ..
+```
 
-# Edge-Pi inference — 71 tests
+Edge-Pi inference — 71 tests:
+
+```sh
 cd edge-pi/python && python3 -m pytest test_inference.py test_capture.py -v && cd ../..
+```
 
-# Frontend — unit + Playwright E2E
+Frontend — unit + Playwright E2E:
+
+```sh
 cd coav-gui/frontend && npm test && npm run test:e2e && cd ../..
 ```
 <img src="images/pytest.png" width="755" />
@@ -301,11 +320,15 @@ Azure issues the certificate automatically (up to 20 min). No frontend code chan
 
 ## Teardown cloud deployment
 
-```sh
-# GUI + emulator + ACR
-cd terraform/app && terraform destroy -auto-approve
+GUI + emulator + ACR:
 
-# Event Hub + Storage + Databricks
+```sh
+cd terraform/app && terraform destroy -auto-approve
+```
+
+Event Hub + Storage + Databricks:
+
+```sh
 cd terraform && terraform destroy -auto-approve
 ```
 
@@ -351,8 +374,9 @@ Runs on push to `main` only. Steps:
 
 CD authenticates to Azure with a service principal stored as a repo secret.
 
+Create a service principal scoped to the resource group and capture its JSON output:
+
 ```sh
-# Create an SP scoped to the resource group and capture the JSON
 az ad sp create-for-rbac \
   --name coav-github-cd \
   --role contributor \

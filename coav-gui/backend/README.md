@@ -81,11 +81,13 @@ docker stop coav-backend && docker rm coav-backend
 
 ```sh
 brew install maven
-
 cd coav-gui/backend
 mvn test
+```
 
-# Single test class
+Run a single test class:
+
+```sh
 mvn test -Dtest=FlightStateStoreTest
 ```
 

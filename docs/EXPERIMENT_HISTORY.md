@@ -22,21 +22,27 @@ the repo as evidence of the migration, not as a live component.
 
 Minikube deploy of the Python prototype (historical):
 
+Start the cluster and build the image inside its daemon:
+
 ```sh
 brew install kubectl minikube
 minikube start --cpus=2 --memory=4096 --driver=docker
 kubectl get nodes
-
-# Build inside the cluster daemon
 eval $(minikube docker-env)
 minikube image build -t coav-backend:v1 ./backend
+```
 
-# Secret + deploy
+Create the secret and deploy:
+
+```sh
 kubectl create secret generic coav-secrets --from-literal=eventhub-cn="$CONN_STR"
 kubectl apply -f k8s/deployment.yaml
 kubectl logs deployment/coav-backend-deployment --tail=50 -f
+```
 
-# Tear down
+Tear down:
+
+```sh
 kubectl delete deployment coav-backend-deployment --ignore-not-found=true
 kubectl delete secret coav-secrets --ignore-not-found=true
 minikube stop && minikube delete --all --purge
@@ -58,8 +64,11 @@ kubectl apply -f k8s/coav-gui-backend-deployment.yaml
 kubectl get pods -l app=coav-gui-backend
 kubectl port-forward svc/coav-gui-backend-svc 8080:8080
 curl http://localhost:8080/api/flights
+```
 
-# Tear down
+Tear down:
+
+```sh
 kubectl delete -f k8s/coav-gui-backend-deployment.yaml
 ```
 
@@ -100,8 +109,11 @@ export DATABRICKS_TOKEN
 
 JOB_ID=$(databricks jobs list --output JSON | jq -r '.[] | select(.settings.name == "Run Coav Stream Processing") | .job_id')
 databricks jobs run-now "$JOB_ID"
+```
 
-# Back to classic auth
+Back to classic auth:
+
+```sh
 unset DATABRICKS_TOKEN
 export DATABRICKS_AUTH_TYPE="azure-cli"
 ```

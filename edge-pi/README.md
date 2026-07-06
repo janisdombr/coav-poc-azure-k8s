@@ -232,8 +232,11 @@ az vm create \
 export VM_IP="<ip from above>"
 
 ssh -i ~/.ssh/coav_train azureuser@$VM_IP
+```
 
-# On the VM:
+Then, on the VM, install dependencies and start training:
+
+```sh
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip3 install segmentation-models-pytorch albumentations huggingface_hub opencv-python-headless
 
@@ -242,8 +245,11 @@ export HF_REPO="your-username/coav-contrail-checkpoints"
 
 nohup python3 train.py --epochs 40 --work-dir /tmp/coav > train.log 2>&1 &
 tail -f train.log
+```
 
-# When done — stop billing:
+When done, stop billing (run locally):
+
+```sh
 az vm delete --resource-group $RG --name $VM_NAME --yes --no-wait
 ```
 
@@ -253,12 +259,12 @@ az vm delete --resource-group $RG --name $VM_NAME --yes --no-wait
 
 ## Dataset
 
-```sh
-# GVCCS: Ground Visible Camera Contrail Sequences
-# EUROCONTROL MUAC · CC BY 4.0 · DOI 10.5281/zenodo.15743988
-# ~2.1 GB — auto-downloaded by train.py and both notebooks
+**GVCCS** — Ground Visible Camera Contrail Sequences · EUROCONTROL MUAC · CC BY 4.0 · DOI
+10.5281/zenodo.15743988 · ~2.1 GB, auto-downloaded by `train.py` and both notebooks.
 
-# Manual download:
+Manual download:
+
+```sh
 export DATA_DIR="edge-pi/data"
 wget 'https://zenodo.org/records/15743988/files/GVCCS.zip?download=1' -O $DATA_DIR/GVCCS.zip
 unzip $DATA_DIR/GVCCS.zip -d $DATA_DIR/
@@ -302,5 +308,6 @@ export PREDICTIONS="my_predictions.json"
 python3 edge-pi/python/eval_annotations.py \
     --gt  $GT_ANNOTATIONS \
     --pred $PREDICTIONS
-# Reports per-image IoU, Precision, Recall, F1, Detection rate
 ```
+
+Reports per-image IoU, precision, recall, F1, and detection rate.

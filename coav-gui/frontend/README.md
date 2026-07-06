@@ -23,17 +23,17 @@ COAV GUI frontend. Requires the Java backend running at `:8080`.
 cd coav-gui/frontend
 npm install
 npm run dev
-# → http://localhost:5173
 ```
 
-Vite proxies `/api` and `/ws` to `http://localhost:8080` — no CORS configuration needed.
+Serves on `http://localhost:5173`. Vite proxies `/api` and `/ws` to `http://localhost:8080` — no CORS configuration needed.
 
 ## Production build
 
 ```sh
 npm run build
-# Output in dist/ — serve with any static file server
 ```
+
+Output goes to `dist/` — serve it with any static file server.
 
 ## Back to project root
 [Main README](../../README.md)
