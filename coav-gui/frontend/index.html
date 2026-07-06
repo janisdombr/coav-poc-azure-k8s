@@ -11,5 +11,9 @@
     <!-- In local dev (Vite), this 404s silently and window.BACKEND_URL stays undefined -->
     <script src="/config.js" onerror="window.BACKEND_URL=''"></script>
     <script type="module" src="/src/main.ts"></script>
+    <!-- Cloudflare Web Analytics — cookieless, per-hostname; token is public by design -->
+    <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
+            data-cf-beacon='{"token": "a45b7d7003c3435e877d055a2e284d57"}'></script>
+    <!-- End Cloudflare Web Analytics -->
   </body>
 </html>

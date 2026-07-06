@@ -87,6 +87,10 @@ resource "azurerm_container_group" "emulator" {
 
     environment_variables = {
       CONN_STR = "${data.azurerm_eventhub_namespace_authorization_rule.root.primary_connection_string};EntityPath=${var.eventhub_name}"
+      # Without this the emulator defaults to http://localhost:8080 → cannot fetch
+      # /api/issr-zones → blocks 15 min in wait_for_dynamic_zones, then flies stale
+      # Alpha/Bravo routes that don't match the live dynamic zones.
+      BACKEND_URL = "https://${azurerm_container_app.backend.ingress[0].fqdn}"
     }
   }
 
