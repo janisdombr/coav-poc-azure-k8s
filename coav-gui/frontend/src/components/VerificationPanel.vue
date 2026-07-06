@@ -166,7 +166,8 @@ function timeHms(iso: string): string {
   color: #8b949e;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  white-space: nowrap;
+  white-space: normal;
+  min-width: 0;
 }
 
 .verif-note {
