@@ -49,7 +49,8 @@ function drawZones(zones: IssrZone[]): void {
         isDemo
           ? `${zone.id} (demo \u2014 no ISSR now)<br>FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100}`
           : `${zone.id}: FL${zone.minAlt / 100}\u2013FL${zone.maxAlt / 100} \u00b7 +5h forecast`,
-        { direction: 'top' }
+        // Permanent: reviewers scan zone name + vertical extent (FL range) without hovering
+        { direction: 'top', permanent: true, className: 'issr-zone-label' }
       )
       .addTo(zoneLayer!)
   })
@@ -260,9 +261,13 @@ onUnmounted(() => {
   box-shadow: 0 0 9px rgba(255, 140, 0, 0.85);
 }
 
-.flight-map :deep(.cam-marker--warning) {
-  border-color: #ffaa00;
-  color: #ffaa00;
-  box-shadow: 0 0 8px rgba(255, 170, 0, 0.8);
+.flight-map :deep(.issr-zone-label) {
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  font-size: 10px;
+  padding: 2px 6px;
+  box-shadow: none;
 }
+.flight-map :deep(.issr-zone-label::before) { display: none; }
 </style>

@@ -58,7 +58,8 @@ function timeHms(iso: string): string {
       </span>
       <span v-else class="verif-note">
         Frames from one GVCCS camera (Brétigny), time-sliced across 4 virtual positions
-        — illustrates the planned MUAC camera network
+        — illustrates the planned MUAC camera network.
+        GVCCS dataset © EUROCONTROL MUAC — CC BY 4.0 (zenodo.org/records/15743988)
       </span>
     </div>
 
@@ -122,7 +123,8 @@ function timeHms(iso: string): string {
 .verif-header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   padding: 6px 12px 4px;
   min-width: 0;
 }
@@ -168,11 +170,12 @@ function timeHms(iso: string): string {
 }
 
 .verif-note {
-  font-size: 10px;
-  color: #484f58;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11px;
+  color: #8b949e;
+  /* attribution must stay readable — wrap instead of ellipsis-truncating */
+  white-space: normal;
+  line-height: 1.4;
+  flex-basis: 100%;
 }
 
 .verif-empty {

@@ -3,6 +3,7 @@ package com.coav.gui.controller;
 import com.coav.gui.model.Advisory;
 import com.coav.gui.service.AdvisoryService;
 import com.coav.gui.service.FlightStateStore;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -35,14 +36,14 @@ public class AdvisoryController {
 
     // OWASP A03 — advisory ID validated to UUID format before acting on it
     @PostMapping("/accept")
-    public ResponseEntity<Void> accept(@RequestBody AdvisoryDecision body) {
+    public ResponseEntity<Void> accept(@Valid @RequestBody AdvisoryDecision body) {
         return advisoryService.accept(body.getAdvisoryId())
                 ? ResponseEntity.ok().build()
                 : ResponseEntity.notFound().build();
     }
 
     @PostMapping("/reject")
-    public ResponseEntity<Void> reject(@RequestBody AdvisoryDecision body) {
+    public ResponseEntity<Void> reject(@Valid @RequestBody AdvisoryDecision body) {
         return advisoryService.reject(body.getAdvisoryId())
                 ? ResponseEntity.ok().build()
                 : ResponseEntity.notFound().build();

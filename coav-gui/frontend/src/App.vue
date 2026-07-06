@@ -40,6 +40,7 @@ onMounted(() => {
         </div>
       </div>
       <div class="header-status">
+        <span class="data-badge">Synthetic flights · ISSR from Open-Meteo — no live ATC / NM B2B data</span>
         <!-- Mobile: panel toggle always visible in header -->
         <button class="mobile-menu-btn" @click="toggleSidebar" :title="isSidebarOpen ? 'Hide panel' : 'Show panel'">
           <svg v-if="!isSidebarOpen" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -258,6 +259,16 @@ onMounted(() => {
 
 .flight-count { font-size: 12px; color: #8b949e; }
 
+/* Honesty legend — makes clear no real operational feeds are shown */
+.data-badge {
+  font-size: 11px;
+  color: #8b949e;
+  padding: 3px 8px;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .github-link {
   display: flex;
   align-items: center;
@@ -415,6 +426,8 @@ onMounted(() => {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-radius: 14px;
   border: 1px solid #21262d;
   background: transparent;
@@ -482,6 +495,7 @@ onMounted(() => {
 @media (max-width: 767px) {
   .header-sub   { display: none; }
   .flight-count { display: none; }
+  .data-badge   { display: none; }
   .header-title { font-size: 13px; }
   .github-link span { display: none; } /* keep icon, hide "Source" text */
 

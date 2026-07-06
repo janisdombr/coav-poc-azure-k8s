@@ -2,6 +2,7 @@ package com.coav.gui.service;
 
 import com.coav.gui.model.Advisory;
 import com.coav.gui.model.Flight;
+import com.coav.gui.model.IssrZone;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
@@ -40,7 +41,7 @@ public class AdvisoryService {
      *   - CRITICAL: flight entered the zone (ATCO takes over with direct correction)
      *   - null:     trajectory no longer intersects a zone, no longer a risk
      */
-    public void onFlightUpdate(Flight flight) {
+    public void onFlightUpdate(Flight flight, List<IssrZone> zones) {
         boolean isApproaching = "APPROACHING".equals(flight.getAlert());
 
         if (isApproaching) {
@@ -50,8 +51,13 @@ public class AdvisoryService {
                 if (Instant.now().isBefore(cooldown)) return;
                 cooldownUntil.remove(flight.getFlightId());
             }
+            IssrZone zone = zones.stream()
+                    .filter(z -> z.getId().equals(flight.getApproachingZoneId()))
+                    .findFirst().orElse(null);
+            // Zone list may refresh between alert enrichment and this call — retry next tick
+            if (zone == null) return;
             // Generate once; putIfAbsent ignores subsequent ticks for the same flight.
-            Advisory prev = pending.putIfAbsent(flight.getFlightId(), generate(flight));
+            Advisory prev = pending.putIfAbsent(flight.getFlightId(), generate(flight, zone));
             if (prev == null) {
                 broadcast();
             }
@@ -111,15 +117,26 @@ public class AdvisoryService {
         return false;
     }
 
-    private Advisory generate(Flight flight) {
+    private Advisory generate(Flight flight, IssrZone zone) {
         int currentFl = flight.getAltitudeFt() / 100;
-        int flUp      = ((currentFl + 20) / 10) * 10;
-        int flDown    = ((currentFl - 20) / 10) * 10;
+        int zoneMinFl = zone.getMinAlt() / 100;
+        int zoneMaxFl = zone.getMaxAlt() / 100;
+
+        // Advised levels keep the flight's 2000-ft parity and clear the AVOID band —
+        // recommending a level inside the zone would contradict the advisory itself
+        int flUp = currentFl;
+        while (flUp <= zoneMaxFl) flUp += 20;
+        int flDown = currentFl;
+        while (flDown >= zoneMinFl) flDown -= 20;
 
         int minutes = flight.getApproachingMinutes() != null ? flight.getApproachingMinutes() : 0;
+        // ARGOS COAV phrasing as shown on the EUROCONTROL Showcase Summit slides
+        String advised = flDown >= 100
+            ? String.format("ADVISED FL%03d OR FL%03d", flUp, flDown)
+            : String.format("ADVISED FL%03d", flUp);
         String text = String.format(
-            "%s approaching Zone %s in %d min at FL%d. Advised FL%d or FL%d.",
-            flight.getFlightId(), flight.getApproachingZoneId(), minutes, currentFl, flUp, flDown
+            "%s CONTRAIL IN ZONE %s AVOID FL%03d-%03d %s",
+            flight.getFlightId(), zone.getId().toUpperCase(), zoneMinFl, zoneMaxFl, advised
         );
 
         return Advisory.builder()
@@ -129,8 +146,8 @@ public class AdvisoryService {
                 .text(text)
                 .currentFl(currentFl)
                 .recommendedFlUp(flUp)
-                .recommendedFlDown(flDown)
-                .estimatedMinutes(flight.getApproachingMinutes())
+                .recommendedFlDown(Math.max(flDown, 0))
+                .estimatedMinutes(minutes)
                 .status("PENDING")
                 .generatedAt(Instant.now().toString())
                 .decidedAt(null)

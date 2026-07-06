@@ -21,5 +21,11 @@ public class Correction {
     @Max(60000)
     private Integer newAltitudeFt;
 
+    // OWASP A03:2021-Injection — optional free text, length-bounded and restricted to plain ATC
+    // phrasing. Allows any Unicode letter/number (\p{L}\p{N}: EU languages, Cyrillic, umlauts) plus
+    // em/en dash, so legitimate free text never 400s during a live demo, while still blocking
+    // injection metacharacters (< > ; " ' { } & etc. remain outside the class).
+    @Size(max = 200)
+    @Pattern(regexp = "^[\\p{L}\\p{N} .,()/+\\-:°–—]*$")
     private String reason;
 }

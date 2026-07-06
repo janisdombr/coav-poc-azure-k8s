@@ -36,7 +36,7 @@ const { goAuthorized, advisories, approachingFlights } = useFlightStore()
 
     <div class="info-block">
       <div class="info-title">COAV Night Trial</div>
-      <div class="info-row"><span class="info-key">Sector</span> MUAC UALFA / UBRAVO</div>
+      <div class="info-row"><span class="info-key">Sector</span> ISSR Zone Alpha / Zone Bravo (PoC geometry — not MUAC ATC sectors)</div>
       <div class="info-row"><span class="info-key">Method</span> 3-tier FDO workflow</div>
       <div class="info-row"><span class="info-key">Horizon</span> +20 min trajectory</div>
       <div class="info-row">

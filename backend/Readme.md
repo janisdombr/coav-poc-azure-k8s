@@ -1,57 +1,12 @@
-## Preparing the Kubernetes Environment on macOS
-## Check if you have Docker installed and run
-```sh
-brew install kubectl minikube
-minikube start --cpus=2 --memory=4096 --driver=docker
-```
+# `backend/` — Python K8s backend prototype (superseded)
 
-## Check it
+This was the **first** COAV backend: a Python service reading Azure Event Hub with Pydantic
+validation, deployed to a local Minikube cluster. It was replaced by the Java Spring Boot service
+in [`coav-gui/backend/`](../coav-gui/backend/) once the technical spec's explicit requirement for
+a **Java backend + JS/TS frontend** was found (TechSpec 3.1(5)). `main.py` is kept as evidence of
+the migration, not as a live component.
 
-```sh
-kubectl get nodes
-```
+The Minikube run commands for this prototype are preserved in
+→ [docs/EXPERIMENT_HISTORY.md](../docs/EXPERIMENT_HISTORY.md#1-superseded--python-k8s-backend-prototype-backendmainpy)
 
-## Change context to Minikube daemon and build docker image
-
-```sh
-eval $(minikube docker-env)
-minikube image build -t coav-backend:v1 ./backend
-```
-
-## Save $CONN_STR env to cluster secrets
-
-```sh
-kubectl create secret generic coav-secrets \
-  --from-literal=eventhub-cn="$CONN_STR"
-```
-
-## Check if created
-
-```sh
-kubectl get secret coav-secrets -o yaml
-```
-
-## Deploy backend manifest
-
-```sh
-kubectl apply -f k8s/deployment.yaml
-```
-
-## Check last logs
-
-```sh
-kubectl logs deployment/coav-backend-deployment --tail=50 -f
-```
-
-## Clear from K8s
-
-```sh
-kubectl delete deployment coav-backend-deployment --ignore-not-found=true
-kubectl delete secret coav-secrets --ignore-not-found=true
-minikube stop
-minikube delete --all --purge
-docker system prune -a --volumes -f
-```
-
-## Go back to main Readme
-[Main Readme.me](../README.md)
+← Back to [main README](../README.md)

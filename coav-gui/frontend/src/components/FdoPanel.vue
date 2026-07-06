@@ -195,8 +195,7 @@ const toggleInput = (id: string) => {
   gap: 4px;
 }
 
-.eta-dot { font-size: 8px; animation: blink 1.5s ease-in-out infinite; }
-@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+.eta-dot { font-size: 8px; }
 
 .adv-text {
   font-size: 11px;

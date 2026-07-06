@@ -126,7 +126,6 @@ function cancelForm() {
         <div class="card-body">
           <span class="fl-badge">FL{{ Math.round(flight.altitudeFt / 100) }}</span>
           <span class="detail">{{ flight.speedKnots }} kts</span>
-          <span v-if="flight.contrailDetected" class="tag contrail">⚠ Contrail</span>
           <span v-if="flight.issrZone" class="tag issr">ISSR zone</span>
         </div>
 
@@ -152,10 +151,11 @@ function cancelForm() {
           </div>
           <div class="form-actions">
             <button class="btn-send" :disabled="sending" @click="submitCorrection(flight.flightId)">
-              {{ sending ? 'Sending…' : 'Send instruction' }}
+              {{ sending ? 'Sending…' : 'Log FL correction' }}
             </button>
             <button class="btn-cancel" @click="cancelForm">Cancel</button>
           </div>
+          <div class="form-note">advisory support — not a clearance</div>
         </div>
 
         <button
@@ -205,7 +205,6 @@ function cancelForm() {
 }
 
 .alert-card.critical { border-color: rgba(255,68,68,0.35);  background: rgba(255,68,68,0.04); }
-.alert-card.warning  { border-color: rgba(255,170,0,0.35);  background: rgba(255,170,0,0.04); }
 .alert-card.approaching { border-color: rgba(255,140,0,0.35); background: rgba(255,140,0,0.04); }
 .alert-card.cleared  { border-color: rgba(68,220,136,0.25); background: rgba(68,220,136,0.03); }
 
@@ -275,7 +274,6 @@ function cancelForm() {
   letter-spacing: 0.04em;
 }
 
-.tag.contrail { background: rgba(255,68,68,0.15);  color: #ff8080; }
 .tag.issr     { background: rgba(255,170,0,0.15);  color: #ffc145; }
 
 .correction-form {
@@ -309,6 +307,8 @@ function cancelForm() {
 .fl-input { max-width: 80px; }
 
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+
+.form-note { font-size: 10px; color: #8b949e; text-align: right; }
 
 .btn-send {
   padding: 5px 14px;

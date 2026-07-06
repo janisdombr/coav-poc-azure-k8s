@@ -12,8 +12,8 @@ EUROCONTROL MUAC · Contrail Avoidance System · PoC vs Production
 | **Prediction horizon** | Current position only | Trajectory predictor: tactical flight plan + correlated radar → +5 h projection |
 | **Trajectory source** | Linear interpolation from emulator | EUROCONTROL FDMP (NM B2B) + Correlated Surveillance Track |
 | **Contrail metric** | Binary `contrail_detected` flag | Radiative forcing (W/m²) per flight segment via CoCiP/WIMCOT |
-| **Camera data** | Emulated `EDGE_VISION_AI` events from Python script | Raspberry Pi / Azure ACI with picamera2/OpenCV → Azure Event Hub |
-| **Camera inference** | None (flag always mirrors ISSR zone entry) | Edge: MobileNet binary pre-filter; Cloud: GPU VM segmentation model |
+| **Camera data** | `EDGE_VISION_AI` events, camera-keyed (no `flight_id`); 4 notional cameras from time-sliced GVCCS frames | Raspberry Pi / Azure ACI with picamera2/OpenCV → Azure Event Hub |
+| **Camera inference** | Real U-Net (Dice 0.8394) on held-out GVCCS frames, **decoupled** from alerts; OpenCV fallback when weights absent | Edge: MobileNet binary pre-filter; Cloud: GPU VM segmentation model |
 | **Advisory generation** | Auto at APPROACHING state (< 20 min to zone) | COAV Server: automatic, ranked by RF impact, signed by Supervisor |
 | **3-tier workflow** | Supervisor GO/NOGO → FDO accept/reject → ATCO correction form | Same: ARGOS COAV UI with "Input made?" FDO column, ATC clearance back-channel |
 | **Correction channel** | STOMP broadcast only (no feedback loop) | Second Event Hub `atc-commands` → updates trajectory predictor |
@@ -34,7 +34,7 @@ EUROCONTROL MUAC · Contrail Avoidance System · PoC vs Production
                                                         FlightStateStore
                                                          • ConcurrentHashMap<flightId, Flight>
                                                          • 5-min TTL (lastSeen)
-                                                         • enrichAlert(): CRITICAL / APPROACHING / WARNING
+                                                         • enrichAlert(): CRITICAL / APPROACHING / null (pure ISSR geometry)
                                                          • WebSocket broadcast every 2 s → /topic/flights
                                                               │
                                                               ▼
@@ -54,10 +54,15 @@ EUROCONTROL MUAC · Contrail Avoidance System · PoC vs Production
 
 ## Alert state machine (FlightStateStore.enrichAlert)
 
+Alerts are **pure ISSR geometry** — independent of the camera `contrail_detected` flag (P1).
+The `WARNING` state was removed; camera detection is a separate verification channel.
+
 ```
-Normal ──► WARNING ──► APPROACHING ──► CRITICAL
-           (contrail    (< 20 min      (inside
-           detected)    to ISSR zone)   ISSR zone)
+Normal ──► APPROACHING ──► CRITICAL
+           (trajectory      (inside
+           projection       ISSR zone)
+           < 20 min to
+           ISSR zone)
                 │
                 └──► Advisory generated (AdvisoryService)
                      ├── FDO accepts → cooldown 5 min, ATCO issues clearance

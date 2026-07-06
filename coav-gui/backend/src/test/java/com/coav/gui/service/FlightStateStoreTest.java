@@ -260,7 +260,8 @@ class FlightStateStoreTest {
         verify(advisoryService).onFlightUpdate(
             org.mockito.ArgumentMatchers.argThat(f ->
                 "APPROACHING".equals(f.getAlert())
-                    && "ALPHA".equals(f.getApproachingZoneId())));
+                    && "ALPHA".equals(f.getApproachingZoneId())),
+            org.mockito.ArgumentMatchers.anyList());
     }
 
     // --- WebSocket broadcast ---

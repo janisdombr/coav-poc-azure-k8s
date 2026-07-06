@@ -1,7 +1,9 @@
 package com.coav.gui.controller;
 
 import com.coav.gui.model.Correction;
+import com.coav.gui.model.Flight;
 import com.coav.gui.service.CorrectionRateLimiter;
+import com.coav.gui.service.FlightStateStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +35,9 @@ class CorrectionControllerTest {
     @MockBean
     CorrectionRateLimiter rateLimiter;
 
+    @MockBean
+    FlightStateStore flightStateStore;
+
     @BeforeEach
     void allowRateLimit() {
         when(rateLimiter.allow(anyString())).thenReturn(true);
@@ -49,10 +54,13 @@ class CorrectionControllerTest {
 
     @Test
     void postCorrection_validPayload_returnsAccepted() throws Exception {
+        when(flightStateStore.getAllFlights()).thenReturn(java.util.List.of(
+            Flight.builder().flightId("C100-CLB").altitudeFt(35000).build()));
+
         Correction c = new Correction();
         c.setFlightId("C100-CLB");
         c.setNewAltitudeFt(37000);
-        c.setReason("Contrail avoidance — route FL370");
+        c.setReason("Contrail avoidance - route FL370");
 
         mvc.perform(post("/api/correction")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -60,7 +68,8 @@ class CorrectionControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("ACCEPTED"))
             .andExpect(jsonPath("$.flightId").value("C100-CLB"))
-            .andExpect(jsonPath("$.message").value("ATC instruction: C100-CLB change FL to FL370"))
+            .andExpect(jsonPath("$.message").value(
+                "ATCO correction logged: C100-CLB FL350 → FL370 — advisory support only, not a clearance"))
             .andExpect(jsonPath("$.timestamp").isNotEmpty());
     }
 

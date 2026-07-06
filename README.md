@@ -9,6 +9,16 @@ _(URL printed by `terraform output demo_url` after cloud deployment)_
 
 <img src="images/frontend.png" width="1439" />
 
+**Stack:** Raspberry Pi / ACI edge · Azure Event Hubs · Java 21 Spring Boot · Vue 3 + TypeScript ·
+U-Net contrail segmentation · Terraform · GitHub Actions CI/CD
+
+**Contents:** [Architecture](#architecture) · [Edge AI model](#edge-ai--contrail-detection-model) ·
+[Local dev & testing](#local-development--testing) ·
+[Cloud deployment](#cloud-deployment-azure-container-apps) · [CI/CD](#cicd-github-actions) ·
+[API reference](#api-reference) · [Event Hub](#event-hub-architecture) ·
+[Project structure](#project-structure) ·
+[Experiment history](docs/EXPERIMENT_HISTORY.md)
+
 ---
 
 ## Architecture
@@ -71,185 +81,105 @@ Full training history, model selection rationale, and deployment instructions �
 
 # LOCAL DEVELOPMENT & TESTING
 
-## Prepare env (install terraform, python3, azure cli. See installation instruction for your OS) and auth with Azure
+## Quick start — no Azure needed (mock mode)
+
+The fastest way to see the GUI running. The backend's `mock` profile runs a built-in flight
+simulator, so no Event Hub or credentials are required. ISSR zones are still live (Open-Meteo).
+
+> Use **Docker Desktop**, not the minikube Docker context. If you previously ran
+> `eval $(minikube docker-env)`, reset it first: `eval $(minikube docker-env -u)`
 
 ```sh
-brew install terraform
-brew install python
-cd edge-emulator
-pip3 install -r requirements.txt
-cd ..
-brew install azure-cli
+# 1. Backend — build once, run in mock mode
+docker build -t coav-gui-backend:v1 ./coav-gui/backend
+docker run -d -p 8080:8080 -e SPRING_PROFILES_ACTIVE=mock --name coav-backend coav-gui-backend:v1
+
+curl http://localhost:8080/api/flights
+curl http://localhost:8080/api/issr-zones
+
+# 2. Frontend — Vite dev server (proxies /api and /ws → :8080)
+cd coav-gui/frontend
+npm install          # once
+npm run dev          # → http://localhost:5173
+
+# Stop the backend when done
+docker stop coav-backend && docker rm coav-backend
+```
+
+<img src="images/javaspringtests.png" width="581" />
+
+## Full local pipeline — with Azure Event Hub
+
+Runs the real edge→cloud data path: the emulator publishes ADS-B + camera telemetry to Event
+Hub, and the backend consumes it live.
+
+```sh
+# Prerequisites: terraform, python3, azure-cli
+brew install terraform python azure-cli
+cd edge-emulator && pip3 install -r requirements.txt && cd ..
 az login
 ```
 
-## Create terraform/main.tf for test infrastructure and deploy it
-
 ```sh
+# 1. Provision test infrastructure (Event Hub, Storage, Databricks workspace)
 cd terraform
 terraform init
 terraform apply
+export CONN_STR=$(terraform output -raw eventhub_connection_string)
 ```
 <img src="images/tf-apply.png" width="544" />
 
-## After success put connection string to CONN_STR env
-
 ```sh
-export CONN_STR=$(terraform output -raw eventhub_connection_string)
-```
-
-## Start emulating (edge-emulator/emulator.py)
-
-The emulator generates **7 aircraft**: 4 transit corridors (BAW/DLH/KLM/AFR families),
-2 holding stacks (BEL256 Brussels DENUT / KLM892 Amsterdam SUGOL), 1 departure (TUI6KL).
-Each transit flight keeps its callsign for the full route crossing, then a new callsign
-starts the same corridor after a gap — no synchronized 5-minute resets.
-
-```sh
+# 2. Start the emulator — 7 aircraft: 4 transit corridors (BAW/DLH/KLM/AFR),
+#    2 holding stacks (BEL256 Brussels DENUT / KLM892 Amsterdam SUGOL), 1 departure (TUI6KL).
+#    Each transit flight keeps its callsign for the full crossing — no synchronized resets.
 cd ../edge-emulator
 python3 emulator.py
 ```
 <img src="images/emulating.png" width="644" />
 
-## Creating OWASP tests and pass it
-
 ```sh
-pytest -v
+# 3. Backend in Azure mode — consumes live Event Hub data
+docker build -t coav-gui-backend:v1 ./coav-gui/backend   # if not built already
+docker run -d -p 8080:8080 -e CONN_STR="$CONN_STR" --name coav-backend coav-gui-backend:v1
+curl http://localhost:8080/api/flights
+docker stop coav-backend && docker rm coav-backend
 ```
-<img src="images/pytest.png" width="755" />
-
-## Destroy terraform stack to save money (after all next steps)
 
 ```sh
-cd ../terraform
-terraform destroy -auto-approve
+# Destroy the stack when done to save money
+cd ../terraform && terraform destroy -auto-approve
 ```
 <img src="images/tf-destroy.png" width="457" />
 
-## Next step - backend -->
-[Backend Readme.md](backend/Readme.md)
+## Tests
 
-## After backend test try Databricks
-
-```sh
-cd databricks
-terraform init
-terraform apply
-```
-
-## After creating all resources we need to run job using Databricks CLI
-## install if needed
-```sh
-brew tap databricks/tap
-brew trust databricks/tap
-brew install databricks
-export DATABRICKS_AUTH_TYPE="azure-cli"
-```
-## run (just run it if you have installed jq already)
+All of these run automatically in CI (`.github/workflows/ci.yml`, path-filtered).
 
 ```sh
-WORKSPACE_RESOURCE_ID=$(terraform output -raw -state=../terraform.tfstate databricks_workspace_id)
-DATABRICKS_HOST="https://$(az resource show --ids "$WORKSPACE_RESOURCE_ID" --query "properties.workspaceUrl" -o tsv)"
-export DATABRICKS_HOST
-SUBSCRIPTION_ID=$(echo "$WORKSPACE_RESOURCE_ID" | cut -d'/' -f3)
-TENANT_ID=$(az account list --query "[?id=='$SUBSCRIPTION_ID'].tenantId" -o tsv)
-DATABRICKS_TOKEN=$(az account get-access-token \
-  --tenant "$TENANT_ID" \
-  --scope "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default" \
-  --query "accessToken" \
-  -o tsv)
-unset DATABRICKS_AUTH_TYPE
-export DATABRICKS_TOKEN
-JOB_ID=$(databricks jobs list --output JSON | jq -r '.[] | select(.settings.name == "Run Coav Stream Processing") | .job_id')
-databricks jobs run-now "$JOB_ID"
-```
-## return back to classic auth
-```sh
-unset DATABRICKS_TOKEN
-export DATABRICKS_AUTH_TYPE="azure-cli"
-```
-
----
-
-## GUI Backend — Java Spring Boot
-
-### Two modes: `mock` (no Azure) or default (reads live from Event Hub).
-
-> **Note:** local Docker runs (`mock` and `Azure mode`) use Docker Desktop — do **not** activate
-> the minikube Docker context for these. If you previously ran `eval $(minikube docker-env)`,
-> reset it first: `eval $(minikube docker-env -u)`
-
-## Build the image (Docker Desktop, one-time)
-
-```sh
-docker build -t coav-gui-backend:v1 ./coav-gui/backend
-```
-
-## Mock mode — built-in simulator, no credentials needed
-
-```sh
-docker run -d -p 8080:8080 -e SPRING_PROFILES_ACTIVE=mock --name coav-backend coav-gui-backend:v1
-
-curl http://localhost:8080/api/flights
-curl http://localhost:8080/api/issr-zones
-```
-
-## Stop when done
-```sh
-docker stop coav-backend && docker rm coav-backend
-```
-
-## Azure mode — live Event Hub data
-
-```sh
-export CONN_STR=$(cd terraform && terraform output -raw eventhub_connection_string)
-docker run -d -p 8080:8080 -e CONN_STR="$CONN_STR" --name coav-backend coav-gui-backend:v1
-
-curl http://localhost:8080/api/flights
-```
-## Stop when done
-```sh
-docker stop coav-backend && docker rm coav-backend
-```
-
-## Deploy to Minikube cluster (Azure mode)
-
-The minikube Docker context is required here so the image is built inside the cluster node.
-
-```sh
-eval $(minikube docker-env)
-minikube image build -t coav-gui-backend:v1 ./coav-gui/backend
-
-# Create secret (skip if already exists from a previous deploy)
-kubectl create secret generic coav-secrets --from-literal=eventhub-cn="$CONN_STR"
-
-kubectl apply -f k8s/coav-gui-backend-deployment.yaml
-
-# Forward cluster port to localhost
-kubectl port-forward svc/coav-gui-backend-svc 8080:8080
-
-curl http://localhost:8080/api/flights
-```
-
-Full command reference → [coav-gui/backend/README.md](coav-gui/backend/README.md)
-
-## Run backend tests (104 tests, no Maven install needed)
-
-```sh
+# Backend — 104 JUnit tests (Maven runs inside Docker; no local JDK needed)
 docker run --rm -v "$PWD/coav-gui/backend":/build -w /build \
   maven:3.9-eclipse-temurin-21-alpine mvn test
+
+# Emulator — 24 tests (incl. OWASP input validation)
+cd edge-emulator && python3 -m pytest test_emulator.py -v && cd ..
+
+# Edge-Pi inference — 71 tests
+cd edge-pi/python && python3 -m pytest test_inference.py test_capture.py -v && cd ../..
+
+# Frontend — unit + Playwright E2E
+cd coav-gui/frontend && npm test && npm run test:e2e && cd ../..
 ```
-<img src="images/javaspringtests.png" width="581" />
+<img src="images/pytest.png" width="755" />
 
-## Vue 3 Frontend — local dev
+Full backend command reference → [coav-gui/backend/README.md](coav-gui/backend/README.md)
 
-Requires the backend running on :8080.
+## Superseded & optional paths
 
-```sh
-cd coav-gui/frontend
-npm install   # once
-npm run dev   # → http://localhost:5173 (proxy /api and /ws → :8080)
-```
+Earlier prototype paths (Python K8s backend, Minikube deploys) and optional sub-systems (the
+Databricks stream-processing job), plus the real engineering problems solved along the way, are
+documented in → **[docs/EXPERIMENT_HISTORY.md](docs/EXPERIMENT_HISTORY.md)**. None of them are
+needed to reproduce the current demo.
 
 ---
 

@@ -55,7 +55,7 @@ public class FlightStateStore {
         Flight enriched = enrichAlert(flight);
         flights.put(enriched.getFlightId(), enriched);
         lastSeen.put(enriched.getFlightId(), Instant.now());
-        advisoryService.onFlightUpdate(enriched);
+        advisoryService.onFlightUpdate(enriched, issrZones);
     }
 
     public Collection<Flight> getAllFlights() {
