@@ -91,6 +91,7 @@ test.describe('COAV E2E', () => {
 
   test('ATCO: "Change FL" opens inline correction form', async ({ page }) => {
     await waitForLive(page)
+    await waitForFlights(page)
     await switchTab(page, 'ATCO')
     await expect(page.locator('.alert-card').first()).toBeVisible({ timeout: 20_000 })
     await page.locator('.btn-correct').first().click()
@@ -99,6 +100,7 @@ test.describe('COAV E2E', () => {
 
   test('ATCO: correction POST returns 200 and shows acknowledgement', async ({ page }) => {
     await waitForLive(page)
+    await waitForFlights(page)
     await switchTab(page, 'ATCO')
     await expect(page.locator('.alert-card').first()).toBeVisible({ timeout: 20_000 })
 
@@ -116,11 +118,12 @@ test.describe('COAV E2E', () => {
     expect(response.status()).toBe(200)
 
     await expect(page.locator('.ack-banner')).toBeVisible({ timeout: 5_000 })
-    await expect(page.locator('.ack-banner')).toContainText('ATC instruction')
+    await expect(page.locator('.ack-banner')).toContainText('correction logged')
   })
 
   test('ATCO: POST /api/correction is NOT 405 (regression guard)', async ({ page }) => {
     await waitForLive(page)
+    await waitForFlights(page)
     await switchTab(page, 'ATCO')
     await expect(page.locator('.alert-card').first()).toBeVisible({ timeout: 20_000 })
 

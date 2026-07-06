@@ -18,6 +18,21 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 
+/**
+ * ATCO flight-level correction endpoint (decision-support logging, not a live ATC clearance).
+ *
+ * <p>Security posture:
+ * <ul>
+ *   <li>OWASP A03 (Injection): input is bean-validated via {@code @Valid} on {@link Correction}
+ *       (flight-id and free-text {@code reason} pattern/size constraints).</li>
+ *   <li>OWASP A04 (Insecure Design): rate-limited to 10 corrections/min per client IP, keyed on the
+ *       last {@code X-Forwarded-For} hop (the real client IP appended by the Azure Container Apps
+ *       ingress) so an attacker-supplied earlier hop cannot rotate past the limit.</li>
+ * </ul>
+ *
+ * <p>PoC scope: the correction is validated and broadcast over STOMP only; it is never written back
+ * to Event Hub. Production would publish to a second {@code atc-commands} hub feeding the predictor.
+ */
 @RestController
 @RequestMapping("/api")
 @CrossOrigin(origins = "*")
