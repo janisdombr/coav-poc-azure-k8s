@@ -7,6 +7,6 @@ a **Java backend + JS/TS frontend** was found (TechSpec 3.1(5)). `main.py` is ke
 the migration, not as a live component.
 
 The Minikube run commands for this prototype are preserved in
-→ [docs/EXPERIMENT_HISTORY.md](../docs/EXPERIMENT_HISTORY.md#1-superseded--python-k8s-backend-prototype-backendmainpy)
+→ [EXPERIMENT_HISTORY.md](../EXPERIMENT_HISTORY.md#1-superseded--python-k8s-backend-prototype-backendmainpy)
 
 ← Back to [main README](../README.md)

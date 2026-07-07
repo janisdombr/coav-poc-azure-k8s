@@ -106,6 +106,7 @@ terraform.tfstate.backup
 CLAUDE.md
 logs.txt
 .claude/
+.vscode/
 
 # Maven / Java build artifacts
 coav-gui/backend/target/

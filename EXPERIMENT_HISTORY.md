@@ -7,7 +7,7 @@ of the project's story: earlier prototype paths that were later superseded, opti
 sub-systems, and the real engineering problems solved along the way.
 
 The live demo (https://coav.dombrovski.lv) runs on **Azure Container Apps + ACI** — see the main
-[README](../README.md) for the reproduction path that is actually current. Everything below is
+[README](README.md) for the reproduction path that is actually current. Everything below is
 either historical or optional.
 
 ---
@@ -185,4 +185,4 @@ sitting in "Running" while producing nothing.
 
 ---
 
-← Back to [README](../README.md) · architecture overview in [ARCHITECTURE.md](../ARCHITECTURE.md)
+← Back to [README](README.md) · architecture overview in [ARCHITECTURE.md](ARCHITECTURE.md)

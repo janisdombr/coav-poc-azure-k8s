@@ -122,7 +122,7 @@ Test coverage (104 tests):
 The production deployment is now **Azure Container Apps** (`terraform/app`, single command — see
 the [root README](../../README.md#cloud-deployment-azure-container-apps)). The earlier Minikube
 deploy of this backend is kept for reference in
-[docs/EXPERIMENT_HISTORY.md](../../docs/EXPERIMENT_HISTORY.md#2-superseded--minikube-deploy-of-the-java-backend).
+[EXPERIMENT_HISTORY.md](../../EXPERIMENT_HISTORY.md#2-superseded--minikube-deploy-of-the-java-backend).
 
 ---
 

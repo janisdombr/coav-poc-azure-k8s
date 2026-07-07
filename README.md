@@ -17,7 +17,7 @@ U-Net contrail segmentation · Terraform · GitHub Actions CI/CD
 [Cloud deployment](#cloud-deployment-azure-container-apps) · [CI/CD](#cicd-github-actions) ·
 [API reference](#api-reference) · [Event Hub](#event-hub-architecture) ·
 [Project structure](#project-structure) ·
-[Experiment history](docs/EXPERIMENT_HISTORY.md)
+[Experiment history](EXPERIMENT_HISTORY.md)
 
 ---
 
@@ -197,7 +197,7 @@ Full backend command reference → [coav-gui/backend/README.md](coav-gui/backend
 
 Earlier prototype paths (Python K8s backend, Minikube deploys) and optional sub-systems (the
 Databricks stream-processing job), plus the real engineering problems solved along the way, are
-documented in → **[docs/EXPERIMENT_HISTORY.md](docs/EXPERIMENT_HISTORY.md)**. None of them are
+documented in → **[EXPERIMENT_HISTORY.md](EXPERIMENT_HISTORY.md)**. None of them are
 needed to reproduce the current demo.
 
 ---
