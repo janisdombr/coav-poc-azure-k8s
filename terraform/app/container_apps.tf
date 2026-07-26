@@ -29,7 +29,7 @@ resource "azurerm_container_app" "backend" {
       memory = "1Gi"
 
       env {
-        name  = "CONN_STR"
+        name = "CONN_STR"
         # EntityPath required — namespace-level string alone causes 'eventHubName cannot be null'
         value = "${data.azurerm_eventhub_namespace_authorization_rule.root.primary_connection_string};EntityPath=${var.eventhub_name}"
       }

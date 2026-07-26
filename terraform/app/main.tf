@@ -24,16 +24,16 @@ provider "azurerm" {
 # With resource_provider_registrations = "none" there are no auto-registration
 # conflicts — this block is the single source of truth for what gets registered.
 resource "azurerm_resource_provider_registration" "microsoft_app" {
-  name = "Microsoft.App"                # Azure Container Apps
+  name = "Microsoft.App" # Azure Container Apps
 }
 resource "azurerm_resource_provider_registration" "microsoft_operational_insights" {
   name = "Microsoft.OperationalInsights" # Log Analytics
 }
 resource "azurerm_resource_provider_registration" "microsoft_container_registry" {
-  name = "Microsoft.ContainerRegistry"  # ACR
+  name = "Microsoft.ContainerRegistry" # ACR
 }
 resource "azurerm_resource_provider_registration" "microsoft_container_instance" {
-  name = "Microsoft.ContainerInstance"  # ACI (emulator)
+  name = "Microsoft.ContainerInstance" # ACI (emulator)
 }
 
 # Reference existing resource group created by terraform/main.tf

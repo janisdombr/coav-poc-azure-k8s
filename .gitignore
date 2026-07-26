@@ -137,3 +137,4 @@ interview_prep.md
 MIGRATION_ORACLE.md
 docs/eurocontrol-context.md
 terraform/oracle/.terraform.lock.hcl
+terraform.tfstate.*
