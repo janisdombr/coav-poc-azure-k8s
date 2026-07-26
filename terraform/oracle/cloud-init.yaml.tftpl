@@ -17,7 +17,10 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -euxo pipefail
-
+      # --- 0. Open firewall ports ---------------------------------
+      iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT
+      iptables -I INPUT 2 -p tcp --dport 443 -j ACCEPT
+      netfilter-persistent save || true
       # --- Docker Engine + compose plugin (official Docker apt repo) ---------
       install -m 0755 -d /etc/apt/keyrings
       curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
@@ -47,9 +50,5 @@ write_files:
       docker compose -f /opt/coav/terraform/oracle/docker-compose.yml up -d
 
 runcmd:
-  - iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT
-  - iptables -I INPUT 2 -p tcp --dport 443 -j ACCEPT
-  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
-  - netfilter-persistent save
   # Full trace lands in /var/log/coav-bootstrap.log for debugging first boot.
   - /opt/coav-bootstrap.sh > /var/log/coav-bootstrap.log 2>&1
