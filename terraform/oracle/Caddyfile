@@ -1,0 +1,9 @@
+# Caddy terminates TLS (automatic Let's Encrypt for {$DOMAIN}) and routes:
+#   /api/* and /ws/*  -> Spring Boot backend (STOMP-over-SockJS WebSocket
+#                        upgrade on /ws is handled by Caddy automatically)
+#   everything else   -> nginx serving the built Vue app
+{$DOMAIN} {
+	@backend path /api/* /ws/*
+	reverse_proxy @backend backend:8080
+	reverse_proxy frontend:80
+}

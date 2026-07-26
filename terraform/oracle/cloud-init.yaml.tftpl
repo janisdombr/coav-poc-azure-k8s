@@ -1,0 +1,51 @@
+#cloud-config
+# Bootstraps the COAV free-tier demo on first boot.
+# Rendered by Terraform templatefile() with: domain, repo_url, git_branch.
+# NOTE for template authors: dollar-brace sequences are Terraform template
+# variables; escape as double-dollar-brace if a literal shell expansion of that
+# form is ever needed (plain $VAR shell syntax is safe as-is).
+
+package_update: true
+packages:
+  - git
+  - ca-certificates
+  - curl
+
+write_files:
+  - path: /opt/coav-bootstrap.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+
+      # --- Docker Engine + compose plugin (official Docker apt repo) ---------
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      ARCH="$(dpkg --print-architecture)"
+      CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+      echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" \
+        > /etc/apt/sources.list.d/docker.list
+      apt-get update -y
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+
+      # --- Clone the repo -----------------------------------------------------
+      # Repo is assumed PUBLIC. TODO(private repo): inject a read-only token,
+      # e.g. clone https://x-access-token:<GITHUB_TOKEN>@github.com/... — pass
+      # the token via a Terraform variable and keep it out of logs.
+      rm -rf /opt/coav
+      git clone --depth 1 --branch "${git_branch}" "${repo_url}" /opt/coav
+
+      # --- Build images locally (ARM64 host -> native arm64 images) ----------
+      docker build -t coav-backend:free /opt/coav/coav-gui/backend
+      docker build -t coav-frontend:free /opt/coav/coav-gui/frontend
+
+      # --- Start the stack ----------------------------------------------------
+      # DOMAIN is consumed by docker-compose.yml -> Caddy (TLS via Let's Encrypt).
+      export DOMAIN="${domain}"
+      docker compose -f /opt/coav/terraform/oracle/docker-compose.yml up -d
+
+runcmd:
+  # Full trace lands in /var/log/coav-bootstrap.log for debugging first boot.
+  - /opt/coav-bootstrap.sh > /var/log/coav-bootstrap.log 2>&1

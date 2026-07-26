@@ -103,6 +103,9 @@ terraform.tfstate.backup
 ### Terraform Patch ###
 # End of https://www.gitignore.io/api/terraform
 
+# Terraform-generated SSH private key for the Oracle free-tier VM
+terraform/oracle/coav_oracle_ed25519
+
 CLAUDE.md
 logs.txt
 .claude/
@@ -131,4 +134,6 @@ edge-pi/python/sample_synthetic.jpg
 # CC BY 4.0 — redistribution allowed with attribution; see frames/README.md).
 # Regenerate locally: cd edge-emulator && python prepare_val_frames.py
 interview_prep.md
+MIGRATION_ORACLE.md
 docs/eurocontrol-context.md
+terraform/oracle/.terraform.lock.hcl

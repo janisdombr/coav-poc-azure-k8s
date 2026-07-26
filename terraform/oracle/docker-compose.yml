@@ -1,0 +1,32 @@
+# COAV free-tier demo stack — mock mode, no Azure / Event Hub / emulator.
+# Only Caddy is exposed to the host; backend and frontend stay on the
+# internal compose network and are reached via reverse proxy.
+services:
+  backend:
+    image: coav-backend:free
+    environment:
+      SPRING_PROFILES_ACTIVE: mock
+      COAV_MOCKCAMERA_ENABLED: "true"
+    restart: unless-stopped
+
+  frontend:
+    image: coav-frontend:free
+    environment:
+      # Empty -> browser calls /api and /ws on the same origin (via Caddy).
+      BACKEND_URL: ""
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    environment:
+      DOMAIN: ${DOMAIN}
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
