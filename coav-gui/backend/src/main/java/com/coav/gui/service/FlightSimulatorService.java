@@ -1,26 +1,19 @@
 package com.coav.gui.service;
 
 import com.coav.gui.model.Flight;
+import com.coav.gui.model.IssrZone;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
-/**
- * Mock traffic generator for the MUAC upper airspace sector.
- *
- * Three flight archetypes:
- *  1. Transit  — enters from sector boundary, crosses, exits and disappears.
- *                After a gap a new aircraft with a different callsign flies the
- *                same route corridor.  Callsigns cycle through an airline pool.
- *  2. Holding  — orbits a VOR/fix indefinitely with the SAME callsign (real
- *                holding stacks don't change identity mid-hold).
- *  3. Departure — climbs out of Maastricht (EHBK), reaches cruise and exits
- *                sector to the north; disappears.  Does NOT repeat.
- */
+@Slf4j
 @Service
 @Profile("mock")
 @RequiredArgsConstructor
@@ -30,171 +23,198 @@ public class FlightSimulatorService {
     private final Random rng = new Random();
     private long tick = 0;
 
-    // ── Transit corridors (MUAC upper-airspace airways) ───────────────────────
-    // Each row: {startLat, startLon, endLat, endLon}
-    private static final double[][] ROUTES = {
-        {50.20, 3.80,  52.80, 9.00},  // SW→NE  A7 / N871  Paris → Hamburg
-        {51.50, 9.20,  50.70, 3.40},  // E→W    T180       Frankfurt → Brussels
-        {49.80, 6.50,  52.90, 3.20},  // SE→NW  B317       Luxembourg → North Sea
-        {49.40, 4.60,  53.30, 6.80},  // S→N    UN852      Reims → Frisian Islands
-    };
+    private List<RouteConfig> activeRoutes = new ArrayList<>();
+    private List<HoldConfig> activeHolds = new ArrayList<>();
+    private long lastZoneCheckTick = -999;
 
-    // Ticks (2 s each) to cross the sector — roughly 25–32 min per route
-    private static final int[] DURATIONS = {950, 780, 870, 820};
-
-    // Cooldown ticks before the next aircraft spawns on the same route (4–7 min)
     private static final int COOLDOWN_BASE = 130;
-    private static final int COOLDOWN_VAR  = 60;
+    private static final int COOLDOWN_VAR = 60;
 
-    // Typical cruise FL and speed per corridor
-    private static final int[]    ALTITUDES      = {35000, 37000, 33000, 36000};
-    private static final int[]    SPEEDS         = {475, 465, 480, 460};
-    // Pre-computed bearings (degrees, 0=N 90=E) from route start → end
-    private static final double[] ROUTE_HEADINGS = {51.0, 257.0, 326.0, 20.0};
+    private static class RouteConfig {
+        double startLat, startLon, endLat, endLon;
+        int duration, altitude, speed;
+        double heading;
+        String[] airlines;
+        int[] numbers;
 
-    // Airline pools per corridor — cycle through on each new transit
-    private static final String[][] ROUTE_AIRLINES = {
-        {"BAW", "EZY", "VLG", "IBE", "TAP"},  // SW→NE: London–continent operators
-        {"DLH", "AUA", "SWR", "BER", "WZZ"},  // E→W:   German/Austrian carriers
-        {"KLM", "TRA", "DAT", "VLR", "DEN"},  // SE→NW: Benelux northbound
-        {"AFR", "TVF", "HOP", "XLR", "LFR"},  // S→N:   French carriers north
-    };
-    private static final int[][] ROUTE_NUMBERS = {
-        {214, 316, 429, 551, 682},
-        {437, 593, 712, 821, 934},
-        {871, 992, 104, 215, 328},
-        {133, 267, 381, 475, 598},
-    };
-
-    // ── Holding stacks (fixed callsign — orbits indefinitely) ─────────────────
-    // {centerLat, centerLon, radiusLat, radiusLon}
-    private static final double[][] HOLDS = {
-        {50.50, 4.80, 0.12, 0.19},  // Brussels  DENUT hold  (FL350)
-        {52.30, 4.45, 0.10, 0.16},  // Amsterdam SUGOL hold  (FL330)
-    };
-    private static final int[]    HOLD_ALTS   = {35000, 33000};
-    private static final int[]    HOLD_SPEEDS  = {265, 265};
-    private static final String[] HOLD_IDS    = {"BEL256", "KLM892"};
-    // One full orbit ≈ 420 ticks (14 min), angular step per tick:
-    private static final double   HOLD_OMEGA  = 2 * Math.PI / 420.0;
-
-    // ── Departure (EHBK → northbound, one-shot) ───────────────────────────────
-    // Climbs from FL100 to FL350, then transits north-west until sector edge.
-    // Total lifecycle: ~600 ticks (20 min).  No repeat — appears once on startup.
-    private static final String DEP_ID       = "TUI6KL";
-    private static final double DEP_START_LAT = 50.91;  // Maastricht Aachen Airport
-    private static final double DEP_START_LON = 5.77;
-    private static final double DEP_END_LAT   = 52.50;
-    private static final double DEP_END_LON   = 4.20;
-    private static final int    DEP_DURATION  = 600;
-
-    // ── Mutable state ─────────────────────────────────────────────────────────
-    private final long[]    routeProgress   = new long[ROUTES.length];
-    private final boolean[] routeActive     = new boolean[ROUTES.length];
-    private final long[]    routeCooldown   = new long[ROUTES.length];
-    private final int[]     routeAirlineIdx = new int[ROUTES.length];
-    private final String[]  routeFlightId   = new String[ROUTES.length];
-
-    // Stagger initial progress so flights arrive spread across the sector at startup
-    {
-        for (int i = 0; i < ROUTES.length; i++) {
-            routeProgress[i]   = (long) (DURATIONS[i] * (i + 1.0) / (ROUTES.length + 1.0));
-            routeActive[i]     = true;
-            routeAirlineIdx[i] = 0;
-            routeFlightId[i]   = callsign(i, 0);
-        }
+        long progress;
+        boolean active;
+        long cooldown;
+        int airlineIdx;
+        String flightId;
     }
 
+    private static class HoldConfig {
+        double lat, lon, rLat, rLon;
+        int altitude, speed;
+        String flightId;
+    }
+
+    private static final String DEP_ID = "TUI6KL";
+    private static final String ARR_ID = "RYR912";
     private long depProgress = 0;
-    private boolean depDone  = false;
-
-    private String callsign(int route, int airline) {
-        return ROUTE_AIRLINES[route][airline] + ROUTE_NUMBERS[route][airline];
-    }
+    private boolean depDone = false;
+    private long ARR_DURATION = 600;
+    private long depDuration = 600;
+    private long arrProgress = ARR_DURATION / 4;
+    private boolean arrDone = false;
 
     @Scheduled(fixedRate = 2000)
     public void tick() {
         tick++;
         String iso = Instant.now().toString();
 
-        // ── 1. Transit flights ─────────────────────────────────────────────────
-        for (int i = 0; i < ROUTES.length; i++) {
-            if (!routeActive[i]) {
-                // Counting down gap between consecutive same-route flights
-                if (--routeCooldown[i] <= 0) {
-                    routeAirlineIdx[i] = (routeAirlineIdx[i] + 1) % ROUTE_AIRLINES[i].length;
-                    routeFlightId[i]   = callsign(i, routeAirlineIdx[i]);
-                    routeProgress[i]   = 0;
-                    routeActive[i]     = true;
+        if (tick - lastZoneCheckTick > 450 || activeRoutes.isEmpty()) {
+            recalculateDynamicScenarios();
+            lastZoneCheckTick = tick;
+        }
+
+        for (RouteConfig r : activeRoutes) {
+            if (!r.active) {
+                if (--r.cooldown <= 0) {
+                    r.airlineIdx = (r.airlineIdx + 1) % r.airlines.length;
+                    r.flightId = r.airlines[r.airlineIdx] + r.numbers[r.airlineIdx];
+                    r.progress = 0;
+                    r.active = true;
                 }
                 continue;
             }
 
-            if (++routeProgress[i] > DURATIONS[i]) {
-                // Exited the sector — stop publishing; 5-min TTL removes it from store
-                routeActive[i]   = false;
-                routeCooldown[i] = COOLDOWN_BASE + rng.nextInt(COOLDOWN_VAR);
+            if (++r.progress > r.duration) {
+                r.active = false;
+                r.cooldown = COOLDOWN_BASE + rng.nextInt(COOLDOWN_VAR);
                 continue;
             }
 
-            double t   = (double) routeProgress[i] / DURATIONS[i];
-            double lat = ROUTES[i][0] + t * (ROUTES[i][2] - ROUTES[i][0]);
-            double lon = ROUTES[i][1] + t * (ROUTES[i][3] - ROUTES[i][1]);
-            int    alt = ALTITUDES[i] + (int) (Math.sin(tick * 0.003 + i) * 200);
+            double t = (double) r.progress / r.duration;
+            double lat = r.startLat + t * (r.endLat - r.startLat);
+            double lon = r.startLon + t * (r.endLon - r.startLon);
+            int alt = r.altitude + (int) (Math.sin(tick * 0.003) * 200);
 
-            emit(routeFlightId[i], lat, lon, alt, SPEEDS[i], ROUTE_HEADINGS[i], iso);
+            emit(r.flightId, lat, lon, alt, r.speed, r.heading, iso);
         }
 
-        // ── 2. Holding stacks (infinite orbit, fixed callsign) ─────────────────
-        for (int h = 0; h < HOLDS.length; h++) {
-            double angle   = tick * HOLD_OMEGA + h * Math.PI;
-            double lat     = HOLDS[h][0] + HOLDS[h][2] * Math.sin(angle);
-            double lon     = HOLDS[h][1] + HOLDS[h][3] * Math.cos(angle);
-            int    alt     = HOLD_ALTS[h] + (int) (Math.sin(tick * 0.002 + h) * 100);
-            // Tangential heading: perpendicular to radius at current orbit position
-            double dLat    = HOLDS[h][2] * Math.cos(angle);   // proportional to velocity
-            double dLon    = -HOLDS[h][3] * Math.sin(angle);
+        for (int h = 0; h < activeHolds.size(); h++) {
+            HoldConfig hold = activeHolds.get(h);
+            double omega = 2 * Math.PI / 420.0;
+            double angle = tick * omega + h * Math.PI;
+            double lat = hold.lat + hold.rLat * Math.sin(angle);
+            double lon = hold.lon + hold.rLon * Math.cos(angle);
+            int alt = hold.altitude + (int) (Math.sin(tick * 0.002 + h) * 100);
+
+            double dLat = hold.rLat * Math.cos(angle);
+            double dLon = -hold.rLon * Math.sin(angle);
             double heading = (Math.toDegrees(Math.atan2(dLon, dLat)) + 360) % 360;
-            emit(HOLD_IDS[h], lat, lon, alt, HOLD_SPEEDS[h], heading, iso);
+
+            emit(hold.flightId, lat, lon, alt, hold.speed, heading, iso);
         }
 
-        // ── 3. Departure (one-shot: climbs, exits, done) ──────────────────────
         if (!depDone) {
             depProgress++;
-            double t = (double) depProgress / DEP_DURATION;
-
-            double lat = DEP_START_LAT + t * (DEP_END_LAT - DEP_START_LAT);
-            double lon = DEP_START_LON + t * (DEP_END_LON - DEP_START_LON);
-            // Climb from FL100 to FL350, level off at cruise after 40 %
-            int alt = t < 0.4
-                ? (int) (10000 + t / 0.4 * 25000)
-                : 35000 + (int) (Math.sin(tick * 0.003) * 100);
-            int speed = t < 0.4
-                ? (int) (280 + t / 0.4 * 195)  // accelerate 280 → 475 kt
-                : 475;
-
+            double t = (double) depProgress / depDuration;
+            double lat = 50.91 + t * (52.50 - 50.91);
+            double lon = 5.77 + t * (4.20 - 5.77);
+            int alt = t < 0.4 ? (int) (10000 + t / 0.4 * 25000) : 35000;
+            int speed = t < 0.4 ? (int) (280 + t / 0.4 * 195) : 475;
             emit(DEP_ID, lat, lon, alt, speed, 329.0, iso);
+            if (depProgress >= depDuration)
+                depDone = true;
+        }
 
-            if (depProgress >= DEP_DURATION) {
-                depDone = true; // exits sector — TTL will clean up store entry
+        if (!arrDone) {
+            arrProgress++;
+            double t = (double) arrProgress / ARR_DURATION;
+            double lat = 52.50 + t * (50.91 - 52.50);
+            double lon = 4.20 + t * (5.77 - 4.20);
+            int alt = t < 0.6 ? 35000 : (int) (35000 * (1.0 - (t - 0.6) / 0.4));
+            int speed = t < 0.6 ? 475 : 140;
+            emit(ARR_ID, lat, lon, Math.max(alt, 0), Math.max(speed, 140), 165.0, iso);
+            if (arrProgress >= ARR_DURATION)
+                arrDone = true;
+        }
+    }
+
+    /**
+     * Recalculate the active flight scenarios based on the current ISSR zones. This
+     * method is called periodically to update the flight paths and holding
+     * patterns.
+     */
+    private void recalculateDynamicScenarios() {
+        List<IssrZone> zones = store.getIssrZones();
+        if (zones == null || zones.isEmpty()) {
+            return;
+        }
+
+        activeRoutes.clear();
+        activeHolds.clear();
+        int n = zones.size();
+        log.info("[Simulator] Rebuilding flight scenarios based on {} active ISSR zones", n);
+
+        String[][] airlines = {
+                { "DLH", "BAW", "EZY" }, { "AFR", "TVF", "KLM" }, { "AUA", "SWR", "BER" }
+        };
+        int[][] numbers = {
+                { 437, 214, 316 }, { 133, 267, 871 }, { 593, 712, 821 }
+        };
+
+        for (int i = 0; i < 4; i++) {
+            IssrZone z = zones.get(i % n);
+            double cLat = (z.getMinLat() + z.getMaxLat()) / 2.0;
+            double cLon = (z.getMinLon() + z.getMaxLon()) / 2.0;
+            int midAlt = (z.getMinAlt() + z.getMaxAlt()) / 2;
+
+            RouteConfig r = new RouteConfig();
+            if (i % 2 == 0) {
+                r.startLat = cLat + 0.4;
+                r.startLon = z.getMaxLon() + 2.0;
+                r.endLat = cLat - 0.4;
+                r.endLon = z.getMinLon() - 2.0;
+            } else {
+                r.startLat = z.getMinLat() - 2.0;
+                r.startLon = cLon + 0.2;
+                r.endLat = z.getMaxLat() + 2.0;
+                r.endLon = cLon - 0.2;
             }
+            r.altitude = midAlt;
+            r.speed = 470;
+            r.duration = 800;
+            r.heading = 45.0; // Упрощенно
+            r.airlines = airlines[i % airlines.length];
+            r.numbers = numbers[i % numbers.length];
+            r.airlineIdx = 0;
+            r.flightId = r.airlines[0] + r.numbers[0];
+            r.progress = (long) (r.duration * (i + 1.0) / 5.0);
+            r.active = true;
+
+            activeRoutes.add(r);
+        }
+
+        for (int h = 0; h < Math.min(2, n); h++) {
+            IssrZone z = zones.get(h);
+            HoldConfig hold = new HoldConfig();
+            hold.lat = (z.getMinLat() + z.getMaxLat()) / 2.0;
+            hold.lon = (z.getMinLon() + z.getMaxLon()) / 2.0;
+            hold.rLat = 0.12;
+            hold.rLon = 0.18;
+            hold.altitude = z.getMinAlt();
+            hold.speed = 265;
+            hold.flightId = h == 0 ? "BEL256" : "KLM892";
+            activeHolds.add(hold);
         }
     }
 
     private void emit(String flightId, double lat, double lon, int alt, int speed,
-                      double heading, String iso) {
-        boolean inIssr   = store.isInsideIssrZone(lat, lon, alt);
-        // Simulation flavour only — alerts are derived from ISSR geometry alone
-        // in FlightStateStore.enrichAlert(), same as the live Event Hub path (P1)
+            double heading, String iso) {
+        boolean inIssr = store.isInsideIssrZone(lat, lon, alt);
         boolean contrail = inIssr || rng.nextDouble() < 0.12;
 
         store.updateFlight(Flight.builder()
-            .flightId(flightId)
-            .latitude(lat).longitude(lon)
-            .altitudeFt(alt).speedKnots(speed)
-            .heading(heading)
-            .contrailDetected(contrail).issrZone(inIssr)
-            .timestamp(iso)
-            .build());
+                .flightId(flightId)
+                .latitude(lat).longitude(lon)
+                .altitudeFt(alt).speedKnots(speed)
+                .heading(heading)
+                .contrailDetected(contrail).issrZone(inIssr)
+                .timestamp(iso)
+                .build());
     }
 }
