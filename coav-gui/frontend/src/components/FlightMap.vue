@@ -199,14 +199,29 @@ watch(flights, (current) => {
 onMounted(() => {
   if (!mapEl.value) return
   map = L.map(mapEl.value).setView([51.0, 5.5], 7)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-    maxZoom: 19,
-  }).addTo(map)
-
   // Custom pane for ISSR zones — below SVG overlayPane (400) so flight markers stay on top
   map.createPane('zonesPane')
   map.getPane('zonesPane')!.style.zIndex = '350'
+
+  // Place-name labels above the ISSR zone fills but below flight geometry
+  map.createPane('labelsPane')
+  const labelsPane = map.getPane('labelsPane')!
+  labelsPane.style.zIndex = '360'
+  labelsPane.style.pointerEvents = 'none'
+
+  // Esri Dark Gray Canvas — key-free dark basemap (CARTO now watermarks anonymous tiles)
+  L.tileLayer(
+    'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    {
+      attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a>',
+      maxZoom: 16,
+      className: 'basemap-dim',
+    },
+  ).addTo(map)
+  L.tileLayer(
+    'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 16, pane: 'labelsPane' },
+  ).addTo(map)
 
   zoneLayer = L.layerGroup().addTo(map)
 
@@ -231,6 +246,9 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
 }
+
+/* Esri Dark Gray sits lighter than the app chrome — dim the base, leave labels bright */
+.flight-map :deep(.basemap-dim) { filter: brightness(0.5); }
 
 /* :deep() — L.divIcon HTML is injected by Leaflet without scoped attributes */
 .flight-map :deep(.cam-marker-wrap) { background: none; border: none; }
