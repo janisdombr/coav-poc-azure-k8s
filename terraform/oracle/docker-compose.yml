@@ -23,10 +23,19 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
+      # Static sites served by Caddy straight from the host (they were added on the server by hand).
+      - /home/ubuntu/game.dombrovski.lv:/var/www/game.dombrovski.lv
+      - /home/ubuntu/files:/var/www/files:ro
       - caddy_data:/data
     environment:
       DOMAIN: ${DOMAIN}
     restart: unless-stopped
+    # Caddy logs every request of every site on the host; without a cap the json log grows forever.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
 volumes:
   caddy_data:
